@@ -77,6 +77,15 @@ async def add_domain(
     return domain
 
 
+@router.get("/{domain_id}", response_model=DomainResponse)
+async def get_domain(
+    domain_id: uuid.UUID,
+    user: VerifiedUser,
+    db: DB,
+):
+    return await _get_user_domain(domain_id, user.id, db)
+
+
 @router.delete("/{domain_id}", status_code=204)
 async def remove_domain(
     domain_id: uuid.UUID,
