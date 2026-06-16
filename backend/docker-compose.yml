@@ -1,0 +1,129 @@
+services:
+
+  # ── Infraestructura ─────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sajjad
+      POSTGRES_PASSWORD: sajjad
+      POSTGRES_DB: sajjad_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"   # acceso directo desde la máquina host
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sajjad -d sajjad_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"   # acceso directo desde la máquina host
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Migraciones (corre una vez y sale) ──────────────────────
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: alembic upgrade head
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sajjad:sajjad@postgres:5432/sajjad_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ── API FastAPI ──────────────────────────────────────────────
+
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --log-level info
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sajjad:sajjad@postgres:5432/sajjad_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app/backend             # hot-reload del código backend
+      - ../sajjad:/app/sajjad      # hot-reload del paquete de escaneo
+      - pdf_storage:/app/backend/reports
+      - /home/patitasking/go/bin:/go/bin:ro
+    restart: unless-stopped
+
+  # ── Worker Celery (tareas de escaneo) ───────────────────────
+
+  worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: >
+      celery -A app.workers.celery_app worker
+      --loglevel=info
+      --concurrency=2
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sajjad:sajjad@postgres:5432/sajjad_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app/backend
+      - ../sajjad:/app/sajjad      # hot-reload del paquete de escaneo
+      - pdf_storage:/app/backend/reports
+      - /home/patitasking/go/bin:/go/bin:ro
+    restart: unless-stopped
+
+  # ── Celery Beat (programador de scans automáticos) ──────────
+
+  beat:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: >
+      celery -A app.workers.celery_app beat
+      --loglevel=info
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+    volumes:
+      - .:/app/backend
+      - ../sajjad:/app/sajjad      # hot-reload del paquete de escaneo
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  pdf_storage:

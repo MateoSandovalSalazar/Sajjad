@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Reporte de Seguridad — {{ result.domain }}</title>
+<style>
+  /* ── Reset & Base ─────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 11pt; }
+  body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+         color: #1f2937; background: #ffffff; line-height: 1.5; }
+
+  /* ── Color tokens ──────────────────────────────────── */
+  :root {
+    --critical: #dc2626; --critical-bg: #fef2f2;
+    --high:     #ea580c; --high-bg:     #fff7ed;
+    --medium:   #d97706; --medium-bg:   #fffbeb;
+    --low:      #2563eb; --low-bg:      #eff6ff;
+    --info:     #6b7280; --info-bg:     #f9fafb;
+    --accent:   #1e3a5f;
+    --border:   #e5e7eb;
+  }
+
+  /* ── Page breaks ───────────────────────────────────── */
+  .page-break { page-break-after: always; break-after: page; }
+  @page { margin: 20mm 18mm; size: A4; }
+
+  /* ── Cover ─────────────────────────────────────────── */
+  .cover {
+    min-height: 270mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 20mm 0;
+  }
+  .cover-logo { font-size: 36pt; font-weight: 900; letter-spacing: -1px;
+                color: var(--accent); }
+  .cover-logo span { color: var(--critical); }
+  .cover-tagline { font-size: 10pt; color: #6b7280; margin-top: 4px;
+                   letter-spacing: 2px; text-transform: uppercase; }
+  .cover-domain { font-size: 24pt; font-weight: 700; color: var(--accent);
+                  margin: 40px 0 8px; word-break: break-all; }
+  .cover-subtitle { font-size: 12pt; color: #4b5563; }
+
+  .score-block {
+    border: 3px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 32px;
+    display: inline-block;
+    margin: 32px 0;
+  }
+  .score-block.critical { border-color: var(--critical); background: var(--critical-bg); }
+  .score-block.high     { border-color: var(--high);     background: var(--high-bg); }
+  .score-block.medium   { border-color: var(--medium);   background: var(--medium-bg); }
+  .score-block.low      { border-color: var(--low);      background: var(--low-bg); }
+  .score-number { font-size: 72pt; font-weight: 900; line-height: 1;
+                  color: var(--accent); display: block; }
+  .score-label  { font-size: 10pt; color: #6b7280; text-transform: uppercase;
+                  letter-spacing: 1px; display: block; }
+  .score-level  { font-size: 18pt; font-weight: 700; display: block;
+                  text-transform: uppercase; margin-top: 4px; }
+  .score-level.critical { color: var(--critical); }
+  .score-level.high     { color: var(--high); }
+  .score-level.medium   { color: var(--medium); }
+  .score-level.low      { color: var(--low); }
+
+  .cover-meta { color: #6b7280; font-size: 9pt; border-top: 1px solid var(--border);
+                padding-top: 16px; }
+  .cover-meta p { margin-bottom: 4px; }
+
+  /* ── Headings ──────────────────────────────────────── */
+  h1 { font-size: 20pt; font-weight: 800; color: var(--accent);
+       margin-bottom: 16px; padding-bottom: 8px;
+       border-bottom: 3px solid var(--accent); }
+  h2 { font-size: 14pt; font-weight: 700; color: var(--accent);
+       margin: 24px 0 12px; }
+  h3 { font-size: 11pt; font-weight: 700; margin: 16px 0 8px; }
+
+  /* ── Section spacing ───────────────────────────────── */
+  section { margin-bottom: 32px; }
+
+  /* ── Stats grid ────────────────────────────────────── */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 16px 0;
+  }
+  .stat-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+    background: #f9fafb;
+  }
+  .stat-number { font-size: 28pt; font-weight: 900; color: var(--accent);
+                 line-height: 1; display: block; }
+  .stat-label  { font-size: 8pt; color: #6b7280; text-transform: uppercase;
+                 letter-spacing: 1px; margin-top: 4px; display: block; }
+
+  /* ── Severity summary bar ──────────────────────────── */
+  .severity-row {
+    display: flex;
+    gap: 8px;
+    margin: 16px 0;
+  }
+  .sev-pill {
+    flex: 1;
+    border-radius: 6px;
+    padding: 10px 8px;
+    text-align: center;
+    font-weight: 700;
+  }
+  .sev-pill .count { font-size: 22pt; display: block; line-height: 1; }
+  .sev-pill .label { font-size: 8pt; text-transform: uppercase; letter-spacing: 1px; }
+  .sev-pill.critical { background: var(--critical-bg); color: var(--critical); }
+  .sev-pill.high     { background: var(--high-bg);     color: var(--high); }
+  .sev-pill.medium   { background: var(--medium-bg);   color: var(--medium); }
+  .sev-pill.low      { background: var(--low-bg);      color: var(--low); }
+  .sev-pill.info     { background: var(--info-bg);     color: var(--info); }
+
+  /* ── Findings ──────────────────────────────────────── */
+  .finding {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow: hidden;
+    page-break-inside: avoid;
+  }
+  .finding-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .finding-header.critical { background: var(--critical-bg); }
+  .finding-header.high     { background: var(--high-bg); }
+  .finding-header.medium   { background: var(--medium-bg); }
+  .finding-header.low      { background: var(--low-bg); }
+  .finding-header.info     { background: var(--info-bg); }
+  .sev-badge {
+    font-size: 7.5pt; font-weight: 800; padding: 3px 8px;
+    border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px;
+    white-space: nowrap;
+    color: white;
+  }
+  .sev-badge.critical { background: var(--critical); }
+  .sev-badge.high     { background: var(--high); }
+  .sev-badge.medium   { background: var(--medium); }
+  .sev-badge.low      { background: var(--low); }
+  .sev-badge.info     { background: var(--info); }
+  .finding-title { font-size: 10.5pt; font-weight: 700; flex: 1; }
+  .finding-meta  { font-size: 8pt; color: #6b7280; white-space: nowrap; }
+
+  .finding-body { padding: 14px 16px; }
+  .finding-field { margin-bottom: 10px; }
+  .field-label {
+    font-size: 7.5pt; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.8px; color: #6b7280; margin-bottom: 3px;
+  }
+  .field-value { font-size: 9.5pt; }
+  .recommendation {
+    background: #f0fdf4; border-left: 4px solid #22c55e;
+    padding: 10px 14px; border-radius: 0 6px 6px 0;
+    font-size: 9.5pt;
+  }
+  .cve-badge {
+    display: inline-block; background: #1e3a5f; color: white;
+    font-size: 7.5pt; font-weight: 700; padding: 2px 7px;
+    border-radius: 4px; margin-left: 8px;
+  }
+  code {
+    background: #f3f4f6; padding: 1px 5px; border-radius: 3px;
+    font-family: 'Courier New', monospace; font-size: 9pt;
+  }
+
+  /* ── Subdomain list ────────────────────────────────── */
+  .host-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px;
+    font-size: 9pt;
+    font-family: 'Courier New', monospace;
+  }
+  .host-item {
+    background: #f9fafb; border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .host-item.live { border-color: #22c55e; }
+
+  /* ── Ports table ───────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
+  th {
+    background: var(--accent); color: white; text-align: left;
+    padding: 8px 12px; font-size: 8.5pt; text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  td { padding: 7px 12px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: #f9fafb; }
+
+  /* ── Footer (page numbers via WeasyPrint) ──────────── */
+  @page {
+    @bottom-right {
+      content: "Sajjad EASM · Pág. " counter(page) " de " counter(pages);
+      font-size: 8pt; color: #9ca3af;
+    }
+    @bottom-left {
+      content: string(generated);
+      font-size: 8pt; color: #9ca3af;
+    }
+  }
+  .generated-string { string-set: generated content(); display: none; }
+
+  /* ── Empty state ───────────────────────────────────── */
+  .empty-state {
+    color: #9ca3af; font-size: 9.5pt; font-style: italic;
+    padding: 16px 0;
+  }
+
+  /* ── Risk legend ───────────────────────────────────── */
+  .risk-legend { margin-top: 28px; }
+  .risk-legend table { margin-top: 8px; }
+  .risk-legend td:first-child { font-weight: 700; font-family: 'Courier New', monospace; }
+  .risk-legend .lvl-critical { color: var(--critical); font-weight: 700; }
+  .risk-legend .lvl-high     { color: var(--high);     font-weight: 700; }
+  .risk-legend .lvl-medium   { color: var(--medium);   font-weight: 700; }
+  .risk-legend .lvl-low      { color: var(--low);      font-weight: 700; }
+</style>
+</head>
+<body>
+
+<!-- WeasyPrint string variables for footer -->
+<span class="generated-string">{{ result.domain }} · {{ generated_at }}</span>
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- PORTADA                                            -->
+<!-- ══════════════════════════════════════════════════ -->
+<div class="cover">
+  <div>
+    <div class="cover-logo">SAJJAD<span>.</span></div>
+    <div class="cover-tagline">Attack Surface Monitor</div>
+  </div>
+
+  <div>
+    {% if company_name %}
+    <div style="font-size:11pt;color:#6b7280;margin-bottom:4px;">
+      {{ company_name }}
+    </div>
+    {% endif %}
+    <div class="cover-domain">{{ result.domain }}</div>
+    <div class="cover-subtitle">Reporte de Superficie de Ataque Externa</div>
+
+    <div class="score-block {{ result.risk_level }}">
+      <span class="score-number">{{ result.risk_score }}</span>
+      <span class="score-label">Risk Score (0–100)</span>
+      <span class="score-level {{ result.risk_level }}">
+        {{ result.risk_level | upper }}
+      </span>
+    </div>
+  </div>
+
+  <div class="cover-meta">
+    <p><strong>Scan ID:</strong> {{ result.scan_id }}</p>
+    <p><strong>Generado:</strong> {{ generated_at }}</p>
+    {% if result.duration_seconds %}
+    <p>
+      <strong>Duración del escaneo:</strong>
+      {{ "%.0f"|format(result.duration_seconds) }} segundos
+    </p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="page-break"></div>
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- RESUMEN EJECUTIVO                                  -->
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <h1>Resumen Ejecutivo</h1>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <span class="stat-number">{{ result.subdomains | length }}</span>
+      <span class="stat-label">Subdominios descubiertos</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-number">{{ result.live_hosts | length }}</span>
+      <span class="stat-label">Hosts activos</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-number">
+        {{ result.total_open_ports }}
+      </span>
+      <span class="stat-label">Puertos abiertos</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-number">{{ result.total_findings }}</span>
+      <span class="stat-label">Hallazgos totales</span>
+    </div>
+  </div>
+
+  <h2>Hallazgos por Severidad</h2>
+  <div class="severity-row">
+    {% for sev in ['critical', 'high', 'medium', 'low', 'info'] %}
+    <div class="sev-pill {{ sev }}">
+      <span class="count">{{ result.summary.get(sev, 0) }}</span>
+      <span class="label">{{ sev }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if result.summary.get('critical', 0) > 0 %}
+  <div style="background:#fef2f2;border-left:4px solid #dc2626;
+              padding:12px 16px;border-radius:0 8px 8px 0;margin-top:16px;">
+    <strong style="color:#dc2626;">Atención inmediata requerida:</strong>
+    Se detectaron
+    <strong>{{ result.summary.get('critical', 0) }} hallazgos críticos</strong>
+    que representan riesgo severo y deben atenderse de inmediato.
+  </div>
+  {% endif %}
+
+  <div class="risk-legend">
+    <h2>Interpretación del Risk Score</h2>
+    <table>
+      <thead>
+        <tr><th>Rango</th><th>Nivel</th><th>Significado</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>76 – 100</td>
+          <td><span class="lvl-critical">Critical</span></td>
+          <td>Riesgo severo. Vectores de ataque activos o exposición crítica de datos.</td>
+        </tr>
+        <tr>
+          <td>51 – 75</td>
+          <td><span class="lvl-high">High</span></td>
+          <td>Vulnerabilidades significativas. Requieren atención en los próximos días.</td>
+        </tr>
+        <tr>
+          <td>26 – 50</td>
+          <td><span class="lvl-medium">Medium</span></td>
+          <td>Riesgos moderados. Planificar remediación en el próximo ciclo.</td>
+        </tr>
+        <tr>
+          <td>0 – 25</td>
+          <td><span class="lvl-low">Low</span></td>
+          <td>Superficie de ataque controlada. Mantener monitoreo continuo.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="page-break"></div>
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- HALLAZGOS — CRITICAL & HIGH                        -->
+<!-- ══════════════════════════════════════════════════ -->
+{% set critical_high = result.findings_by_severity.critical +
+                       result.findings_by_severity.high %}
+{% if critical_high %}
+<section>
+  <h1>Hallazgos Críticos y Altos</h1>
+  <p style="color:#6b7280;margin-bottom:20px;font-size:9.5pt;">
+    Estos hallazgos requieren atención inmediata.
+    Representan vectores de ataque activos o exposición severa de datos.
+  </p>
+
+  {% for f in critical_high %}
+  <div class="finding">
+    <div class="finding-header {{ f.severity }}">
+      <span class="sev-badge {{ f.severity }}">{{ f.severity }}</span>
+      <span class="finding-title">
+        {{ f.title }}
+        {% if f.cve %}<span class="cve-badge">{{ f.cve }}</span>{% endif %}
+      </span>
+      <span class="finding-meta">{{ f.source_tool }}</span>
+    </div>
+    <div class="finding-body">
+      <div class="finding-field">
+        <div class="field-label">Host afectado</div>
+        <div class="field-value">
+          <code>{{ f.host }}{% if f.port %}:{{ f.port }}{% endif %}</code>
+        </div>
+      </div>
+      <div class="finding-field">
+        <div class="field-label">Descripción</div>
+        <div class="field-value">{{ f.description }}</div>
+      </div>
+      <div class="finding-field">
+        <div class="field-label">Recomendación</div>
+        <div class="recommendation">{{ f.recommendation }}</div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+<div class="page-break"></div>
+{% endif %}
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- HALLAZGOS — MEDIUM                                 -->
+<!-- ══════════════════════════════════════════════════ -->
+{% if result.findings_by_severity.medium %}
+<section>
+  <h1>Hallazgos Medios</h1>
+
+  {% for f in result.findings_by_severity.medium %}
+  <div class="finding">
+    <div class="finding-header {{ f.severity }}">
+      <span class="sev-badge {{ f.severity }}">{{ f.severity }}</span>
+      <span class="finding-title">{{ f.title }}</span>
+      <span class="finding-meta">{{ f.source_tool }}</span>
+    </div>
+    <div class="finding-body">
+      <div class="finding-field">
+        <div class="field-label">Host</div>
+        <div class="field-value">
+          <code>{{ f.host }}{% if f.port %}:{{ f.port }}{% endif %}</code>
+        </div>
+      </div>
+      <div class="finding-field">
+        <div class="field-label">Descripción</div>
+        <div class="field-value">{{ f.description }}</div>
+      </div>
+      <div class="finding-field">
+        <div class="field-label">Recomendación</div>
+        <div class="recommendation">{{ f.recommendation }}</div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+<div class="page-break"></div>
+{% endif %}
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- HALLAZGOS — LOW & INFO                             -->
+<!-- ══════════════════════════════════════════════════ -->
+{% set low_info = result.findings_by_severity.low +
+                  result.findings_by_severity.info %}
+{% if low_info %}
+<section>
+  <h1>Hallazgos Bajos e Informativos</h1>
+  <table>
+    <thead>
+      <tr>
+        <th>Severidad</th>
+        <th>Título</th>
+        <th>Host</th>
+        <th>Herramienta</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in low_info %}
+      <tr>
+        <td><span class="sev-badge {{ f.severity }}">{{ f.severity }}</span></td>
+        <td>{{ f.title }}</td>
+        <td><code>{{ f.host }}{% if f.port %}:{{ f.port }}{% endif %}</code></td>
+        <td>{{ f.source_tool }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<div class="page-break"></div>
+{% endif %}
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- INVENTARIO DE ACTIVOS                              -->
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <h1>Inventario de Activos Descubiertos</h1>
+
+  <h2>Subdominios ({{ result.subdomains | length }})</h2>
+  {% if result.subdomains %}
+  <div class="host-grid">
+    {% for sub in result.subdomains %}
+    <div class="host-item {% if sub in result.live_hosts %}live{% endif %}">
+      {{ sub }}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty-state">
+    No se descubrieron subdominios adicionales fuera del dominio principal
+    durante este escaneo.
+  </p>
+  {% endif %}
+
+  <h2 style="margin-top:24px;">Puertos Abiertos por Host</h2>
+  {% if result.open_ports %}
+  <table>
+    <thead>
+      <tr>
+        <th>Host</th>
+        <th>Puertos abiertos</th>
+        <th>Cantidad</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for host, ports in result.open_ports.items() %}
+      <tr>
+        <td><code>{{ host }}</code></td>
+        <td>{{ ports | sort | join(', ') }}</td>
+        <td>{{ ports | length }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">No se detectaron puertos abiertos durante este escaneo.</p>
+  {% endif %}
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- DISCLAIMER                                         -->
+<!-- ══════════════════════════════════════════════════ -->
+<section style="margin-top:40px;border-top:1px solid var(--border);
+                padding-top:20px;color:#6b7280;font-size:8.5pt;">
+  <p>
+    Este reporte fue generado por <strong>Sajjad EASM</strong> mediante
+    técnicas de reconocimiento pasivo y activo sobre activos verificados
+    como propiedad del cliente. Los hallazgos representan el estado de
+    la superficie de ataque al momento del escaneo.
+    Este documento es confidencial y está destinado exclusivamente
+    al cliente indicado.
+  </p>
+</section>
+
+</body>
+</html>
