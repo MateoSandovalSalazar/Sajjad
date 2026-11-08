@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { authApi } from '../api/auth'
 import { getErrorMessage } from '../lib/errors'
+import { checkPassword } from '../lib/password'
 import { Spinner } from '../components/ui/Spinner'
 import { EyeOfHorus } from '../components/ui/EyeOfHorus'
 
@@ -24,16 +25,9 @@ export function Register() {
       setError('Las contraseñas no coinciden.')
       return
     }
-    if (form.password.length < 8) {
-      setError('La contraseña debe tener al menos 8 caracteres.')
-      return
-    }
-    if (!/[A-Z]/.test(form.password)) {
-      setError('La contraseña debe contener al menos una letra mayúscula.')
-      return
-    }
-    if (!/[0-9]/.test(form.password)) {
-      setError('La contraseña debe contener al menos un número.')
+    const weak = checkPassword(form.password)
+    if (weak) {
+      setError(weak)
       return
     }
     setLoading(true)

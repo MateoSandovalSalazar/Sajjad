@@ -20,6 +20,26 @@ const CODE_ES: Record<string, string> = {
                       'Escríbenos y activamos tu plan manualmente.',
 }
 
+/**
+ * El mensaje que mandó el backend, tal cual.
+ *
+ * `getErrorMessage` traduce por código de error, que es lo correcto
+ * cuando el backend responde en inglés y de forma genérica. Pero hay
+ * caminos —la verificación DNS— donde el backend ya devuelve un
+ * mensaje en español y específico ("el dominio no existe en el DNS"
+ * vs. "no encontré el token"), y traducirlo por código lo
+ * reemplazaría por uno más vago. Aquí se prefiere el del servidor.
+ */
+export function getServerMessage(
+  err: unknown,
+  fallback = 'Algo salió mal. Intenta de nuevo.',
+): string {
+  const body = (err as { response?: { data?: ApiErrorBody } })
+    ?.response?.data
+  if (body?.message) return body.message
+  return getErrorMessage(err, fallback)
+}
+
 export function getErrorMessage(
   err: unknown,
   fallback = 'Algo salió mal. Intenta de nuevo.',

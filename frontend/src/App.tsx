@@ -14,6 +14,8 @@ const Login        = lazy(() => import('./pages/Login').then(m => ({ default: m.
 const Register     = lazy(() => import('./pages/Register').then(m => ({ default: m.Register })))
 const VerifyEmail  = lazy(() => import('./pages/VerifyEmail').then(m => ({ default: m.VerifyEmail })))
 const VerifyPending = lazy(() => import('./pages/VerifyPending').then(m => ({ default: m.VerifyPending })))
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword').then(m => ({ default: m.ForgotPassword })))
+const ResetPassword = lazy(() => import('./pages/ResetPassword').then(m => ({ default: m.ResetPassword })))
 const Dashboard    = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
 const Domains      = lazy(() => import('./pages/Domains').then(m => ({ default: m.Domains })))
 const DomainDetail = lazy(() => import('./pages/DomainDetail').then(m => ({ default: m.DomainDetail })))
@@ -55,6 +57,12 @@ const router = createBrowserRouter([
   { path: '/register',     element: <Register /> },
   { path: '/verify-email', element: <VerifyEmail /> },
   { path: '/verify-pending', element: <VerifyPending /> },
+  // Las dos mitades del flujo de recuperación. La ruta
+  // /reset-password es la que enlaza el correo que manda el backend
+  // (services/email.py): sin ella el enlace caía en el catch-all `*`
+  // y el usuario terminaba en la landing sin explicación.
+  { path: '/forgot-password', element: <ForgotPassword /> },
+  { path: '/reset-password',  element: <ResetPassword /> },
   { path: '/legal/terminos',   element: <Terms /> },
   { path: '/legal/privacidad', element: <Privacy /> },
   {

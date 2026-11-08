@@ -26,12 +26,38 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+# Engine único por proceso de worker.
+#
+# Antes se creaba uno nuevo en CADA tarea, y cada engine trae su propio
+# pool de conexiones que nunca se cerraba: tras unos cientos de
+# escaneos el worker agotaba los `max_connections` de Postgres y toda
+# la aplicación dejaba de conectar.
+#
+# Se construye de forma perezosa a propósito: Celery usa prefork, y un
+# engine creado al importar el módulo heredaría sockets compartidos
+# entre los procesos hijos. Creándolo en la primera tarea, cada worker
+# tiene el suyo.
+_ENGINE = None
+
+
 def _sync_engine():
-    settings = get_settings()
-    sync_url = settings.database_url.replace(
-        "postgresql+asyncpg://", "postgresql://"
-    )
-    return create_engine(sync_url, pool_pre_ping=True)
+    global _ENGINE
+    if _ENGINE is None:
+        settings = get_settings()
+        sync_url = settings.database_url.replace(
+            "postgresql+asyncpg://", "postgresql://"
+        )
+        _ENGINE = create_engine(
+            sync_url,
+            pool_pre_ping=True,
+            # El worker atiende una tarea a la vez (prefetch=1), así que
+            # no necesita un pool grande; lo que sí necesita es reciclar
+            # conexiones que lleven horas abiertas entre escaneos.
+            pool_size=2,
+            max_overflow=3,
+            pool_recycle=1800,
+        )
+    return _ENGINE
 
 
 @celery_app.task(

@@ -1,10 +1,39 @@
+import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { MailCheck } from 'lucide-react'
+import { MailCheck, RefreshCw } from 'lucide-react'
 import { EyeOfHorus } from '../components/ui/EyeOfHorus'
+import { authApi } from '../api/auth'
+import { getErrorMessage } from '../lib/errors'
+import { Spinner } from '../components/ui/Spinner'
 
 export function VerifyPending() {
   const [params] = useSearchParams()
   const email = params.get('email')
+
+  const [sending, setSending] = useState(false)
+  const [resent, setResent]   = useState(false)
+  const [error, setError]     = useState('')
+
+  // El envío del correo en el registro es best-effort: si el SMTP
+  // falla, el alta se completa igual. Sin este botón, el usuario se
+  // quedaba sin cuenta usable y sin salida (volver a registrarse da
+  // 409 "email ya registrado").
+  const resend = async () => {
+    if (!email) return
+    setError('')
+    setSending(true)
+    try {
+      await authApi.resendVerification(email)
+      setResent(true)
+    } catch (err: unknown) {
+      setError(getErrorMessage(
+        err,
+        'No se pudo reenviar el correo. Prueba de nuevo en unos minutos.',
+      ))
+    } finally {
+      setSending(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-obsidian-900 via-obsidian-800
@@ -31,9 +60,35 @@ export function VerifyPending() {
           un par de minutos en llegar.
         </p>
 
+        {error && (
+          <div role="alert" className="bg-red-50 border border-red-200
+            text-red-700 text-sm rounded-xl px-4 py-3 mb-4 text-left">
+            {error}
+          </div>
+        )}
+
         <Link to="/login" className="btn-primary w-full inline-block py-3">
           Ya verifiqué, iniciar sesión
         </Link>
+
+        {email && (
+          resent ? (
+            <p className="text-sm text-green-600 mt-4">
+              Listo, te reenviamos el enlace. Revisa tu bandeja.
+            </p>
+          ) : (
+            <button onClick={resend} disabled={sending}
+              className="mt-4 w-full inline-flex items-center justify-center
+                gap-2 text-sm text-obsidian-700 font-semibold
+                hover:underline disabled:opacity-60">
+              {sending
+                ? <Spinner size="sm" />
+                : <RefreshCw className="h-4 w-4" />
+              }
+              {sending ? 'Reenviando...' : 'Reenviar el correo'}
+            </button>
+          )
+        )}
 
         <p className="text-center text-sm text-gray-400 mt-4">
           ¿Correo equivocado?{' '}

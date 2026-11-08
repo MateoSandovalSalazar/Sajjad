@@ -5,11 +5,18 @@ Startup/shutdown:
 - Validates DB connection on startup
 - Closes connection pool on shutdown
 
-Middleware stack (outer → inner):
-1. CORS
-2. SlowAPI rate limiting
-3. Request ID injection
-4. Trusted host (prod only)
+Middleware stack (de fuera hacia dentro):
+1. CORS                      ← el más externo, a propósito
+2. Request ID + log de acceso + red de seguridad de errores
+3. Trusted host (sólo en producción)
+4. Manejadores de excepciones de Starlette
+
+El orden importa y no es el que sugiere el código a primera vista:
+`add_middleware` INSERTA al principio, así que el último añadido es
+el más externo. CORS se añade al final para que envuelva a todo lo
+demás; si no, las respuestas de error generadas por fuera de él
+salían sin cabeceras CORS y el navegador las mostraba como un fallo
+de CORS en vez de dejar al frontend leer el mensaje.
 """
 
 import logging
@@ -106,15 +113,6 @@ def create_app() -> FastAPI:
             response, request.state.view_rate_limit
         )
 
-    # ── CORS ─────────────────────────────────────────────
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
     # ── Trusted hosts (production guard) ─────────────────
     if settings.is_production:
         app.add_middleware(
@@ -135,6 +133,21 @@ def create_app() -> FastAPI:
         start = time.perf_counter()
         try:
             response: Response = await call_next(request)
+        except Exception as exc:
+            # El handler de `Exception` de Starlette vive en
+            # ServerErrorMiddleware, por FUERA de CORS: sus respuestas
+            # salían sin Access-Control-Allow-Origin y el navegador
+            # las reportaba como error de CORS, ocultando el 500 real.
+            # Atrapándolo aquí, la respuesta sube por CORS y el
+            # frontend puede leer el mensaje.
+            logger.exception("Error no manejado: %s", exc)
+            response = JSONResponse(
+                status_code=500,
+                content={
+                    "error": "InternalServerError",
+                    "message": "An unexpected error occurred.",
+                },
+            )
         finally:
             elapsed = time.perf_counter() - start
             request_id_ctx.reset(token)
@@ -158,6 +171,17 @@ def create_app() -> FastAPI:
         )
         return response
 
+    # ── CORS ─────────────────────────────────────────────
+    # Se añade DE ÚLTIMO para que quede como middleware más externo:
+    # así toda respuesta, incluidas las de error, lleva cabeceras CORS.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     # ── Exception handlers ───────────────────────────────
     @app.exception_handler(SajjadAPIError)
     async def handle_api_error(
@@ -173,6 +197,12 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def handle_unexpected(request: Request, exc: Exception):
+        """
+        Última red. En la práctica casi nunca se dispara: el
+        middleware de request-id atrapa antes los fallos de los
+        endpoints, para que la respuesta pase por CORS. Esto cubre lo
+        que explote por fuera de él.
+        """
         logger.exception("Unhandled error: %s", exc)
         return JSONResponse(
             status_code=500,

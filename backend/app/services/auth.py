@@ -20,6 +20,7 @@ from app.core.security import (
     decode_token,
     dummy_verify,
     hash_password,
+    subject_uuid,
     verify_password,
 )
 from app.models.subscription import Subscription, SubscriptionStatus
@@ -106,9 +107,12 @@ async def refresh_access_token(
     if payload.get("type") != "refresh":
         raise Unauthorized("Invalid token type.")
 
-    user_id = payload.get("sub")
+    user_id = subject_uuid(payload)
+    if user_id is None:
+        raise Unauthorized("Invalid token.")
+
     result = await db.execute(
-        select(User).where(User.id == uuid.UUID(user_id))
+        select(User).where(User.id == user_id)
     )
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
@@ -166,6 +170,44 @@ def _start_trial(sub: Subscription | None) -> None:
     sub.trial_ends_at = now + timedelta(days=settings.trial_days)
 
 
+async def resend_verification_email(
+    email: str,
+    db: AsyncSession,
+) -> None:
+    """
+    Reenvía el correo de verificación. Silencioso siempre.
+
+    Hacía falta un camino de recuperación: el envío del correo en el
+    registro es "best effort" (si el SMTP falla, la excepción se
+    ignora para no tumbar el alta), así que un fallo transitorio
+    dejaba al usuario con una cuenta sin verificar y sin ninguna forma
+    de pedir otro correo — volver a registrarse da 409.
+
+    No revela si el email existe ni si ya estaba verificado: responde
+    igual en todos los casos, como /auth/forgot-password.
+    """
+    result = await db.execute(
+        select(User).where(User.email == email)
+    )
+    user = result.scalar_one_or_none()
+
+    if user is None or user.is_verified:
+        return
+
+    # Si el token se perdió (cuenta antigua), se genera uno nuevo. Si
+    # existe, se reutiliza: así el enlace del correo original sigue
+    # sirviendo y el usuario no se queda con dos enlaces y uno muerto.
+    if not user.email_verification_token:
+        user.email_verification_token = str(uuid.uuid4())
+
+    try:
+        await send_verification_email(
+            user.email, user.full_name, user.email_verification_token
+        )
+    except Exception:
+        pass
+
+
 async def request_password_reset(
     email: str,
     db: AsyncSession,
@@ -200,9 +242,12 @@ async def reset_password(
     if payload.get("type") != "email":
         raise Unauthorized("Invalid token.")
 
-    user_id = payload.get("sub")
+    user_id = subject_uuid(payload)
+    if user_id is None:
+        raise Unauthorized("Invalid token.")
+
     result = await db.execute(
-        select(User).where(User.id == uuid.UUID(user_id))
+        select(User).where(User.id == user_id)
     )
     user = result.scalar_one_or_none()
 

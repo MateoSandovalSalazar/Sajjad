@@ -48,6 +48,10 @@ REGISTER = "5/hour"
 # llama: sin límite es un arma de bombardeo contra terceros.
 PASSWORD_RESET_REQUEST = "3/hour"
 
+# Mismo perfil de abuso que el reset: cada petición manda un correo a
+# una dirección que elige quien llama.
+VERIFICATION_RESEND = "3/hour"
+
 # Adivinar tokens de un solo uso (reset y verificación de email).
 TOKEN_SUBMIT = "10/hour"
 

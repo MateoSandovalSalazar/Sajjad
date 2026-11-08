@@ -19,4 +19,20 @@ export const authApi = {
 
   verifyEmail: (token: string) =>
     api.get<{ message: string }>(`/auth/verify-email?token=${token}`),
+
+  // Reenvía el enlace de verificación. 202 siempre, exista o no la
+  // cuenta y esté o no verificada.
+  resendVerification: (email: string) =>
+    api.post<{ message: string }>('/auth/resend-verification', { email }),
+
+  // Responde 202 exista o no el correo: el backend no revela qué
+  // direcciones están registradas.
+  forgotPassword: (email: string) =>
+    api.post<{ message: string }>('/auth/forgot-password', { email }),
+
+  resetPassword: (token: string, new_password: string) =>
+    api.post<{ message: string }>('/auth/reset-password', {
+      token,
+      new_password,
+    }),
 }

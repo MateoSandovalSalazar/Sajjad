@@ -13,6 +13,8 @@ export const scansApi = {
   listByDomain: (domain_id: string) =>
     api.get<Scan[]>(`/domains/${domain_id}/scans`),
 
-  pdfUrl: (id: string) =>
-    `${import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api/v1'}/scans/${id}/pdf`,
+  // Pasa por la instancia con interceptores, así que si el access
+  // token caducó se refresca y se reintenta solo.
+  pdf: (id: string) =>
+    api.get<Blob>(`/scans/${id}/pdf`, { responseType: 'blob' }),
 }

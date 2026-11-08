@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -74,6 +75,23 @@ def create_email_token(subject: str) -> str:
         "type": "email",
         "exp": expire,
     })
+
+
+def subject_uuid(payload: dict[str, Any]) -> uuid.UUID | None:
+    """
+    El `sub` del token como UUID, o None si no lo es.
+
+    `uuid.UUID(payload["sub"])` a secas lanza ValueError/TypeError ante
+    un token con firma válida pero `sub` basura, y eso sale como un 500.
+    Un token que no identifica a nadie es simplemente inválido.
+    """
+    subject = payload.get("sub")
+    if not isinstance(subject, str):
+        return None
+    try:
+        return uuid.UUID(subject)
+    except ValueError:
+        return None
 
 
 def decode_token(token: str) -> dict[str, Any]:

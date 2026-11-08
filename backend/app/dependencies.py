@@ -5,13 +5,12 @@ All auth, plan enforcement, and DB session management
 live here so routers stay thin and readable.
 """
 
-import uuid
 from typing import Annotated
 
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import (
@@ -19,8 +18,8 @@ from app.core.exceptions import (
     PlanLimitExceeded,
     Unauthorized,
 )
-from app.core.security import decode_token
-from app.database import get_db
+from app.core.security import decode_token, subject_uuid
+from app.database import get_db, get_sessionmaker
 from app.models import User
 
 bearer = HTTPBearer(auto_error=False)
@@ -37,15 +36,15 @@ async def get_current_user(
         raise Unauthorized()
 
     payload = decode_token(credentials.credentials)
-    user_id: str | None = payload.get("sub")
+    user_id = subject_uuid(payload)
     token_type: str | None = payload.get("type")
 
-    if not user_id or token_type != "access":
+    if user_id is None or token_type != "access":
         raise Unauthorized()
 
     result = await db.execute(
         select(User)
-        .where(User.id == uuid.UUID(user_id))
+        .where(User.id == user_id)
         .options(selectinload(User.subscription))
     )
     user = result.scalar_one_or_none()
@@ -102,3 +101,8 @@ async def get_current_plan(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 VerifiedUser = Annotated[User, Depends(require_verified)]
 DB = Annotated[AsyncSession, Depends(get_db)]
+# Para endpoints que necesitan abrir sesiones propias y cortas en vez
+# de retener la de la petición (ver el stream SSE de scans).
+SessionFactory = Annotated[
+    async_sessionmaker[AsyncSession], Depends(get_sessionmaker)
+]

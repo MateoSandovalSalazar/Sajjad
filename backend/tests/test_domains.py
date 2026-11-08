@@ -117,7 +117,9 @@ async def test_cannot_access_other_users_domain(client, db):
         f"{API}/domains/{created['id']}",
         headers=auth_headers(t2),
     )
-    assert r.status_code == 403
+    # 404 y no 403 a propósito: un 403 confirmaría que ese id existe y
+    # dejaría enumerar los dominios de otras cuentas.
+    assert r.status_code == 404
 
 
 async def test_unverified_user_cannot_add_domain(client, db):

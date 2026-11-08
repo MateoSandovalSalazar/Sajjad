@@ -16,6 +16,12 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // Sin una URL con origen real, jsdom considera el origen "opaco" y
+    // NO expone localStorage: cualquier test que toque la sesión
+    // reventaba con "Cannot read properties of undefined".
+    environmentOptions: {
+      jsdom: { url: 'http://localhost:3000' },
+    },
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     // Sin esto, vitest intentaría ejecutar los tests de Playwright

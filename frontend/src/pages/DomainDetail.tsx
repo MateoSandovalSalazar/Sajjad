@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { domainsApi } from '../api/domains'
 import { scansApi } from '../api/scans'
-import { getErrorMessage } from '../lib/errors'
+import { getErrorMessage, getServerMessage } from '../lib/errors'
 import { toast } from '../store/toast'
 import { RiskScoreGauge } from '../components/RiskScoreGauge'
 import { RiskTrendChart } from '../components/RiskTrendChart'
@@ -19,17 +19,27 @@ import { usePlan } from '../hooks/usePlan'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import type { Scan, Severity } from '../types'
 
+// Estas claves son EXACTAMENTE las etapas que emite el orquestador
+// (sajjad/orchestrator.py, `_step(...)`), que el worker guarda en
+// minúsculas en scan.progress_stage. Antes la lista tenía `email` y
+// `scoring`, que el motor nunca emite, y le faltaba `analysis`: al
+// llegar a la última etapa el índice era -1, la barra se desplomaba
+// al 10% y el texto volvía a "Iniciando...".
+const STAGES = [
+  'discovery', 'dns', 'http', 'ports', 'tls',
+  'vulns', 'osint', 'analysis', 'complete',
+] as const
+
 const STAGE_LABELS: Record<string, string> = {
-  discovery:    'Descubriendo subdominios...',
-  dns:          'Analizando DNS...',
-  http:         'Probando servicios web...',
-  ports:        'Escaneando puertos...',
-  tls:          'Revisando certificados...',
-  email:        'Analizando configuración de email...',
-  vulns:        'Buscando vulnerabilidades...',
-  osint:        'Consultando bases de datos externas...',
-  scoring:      'Calculando riesgo...',
-  complete:     'Completado',
+  discovery: 'Descubriendo subdominios...',
+  dns:       'Analizando DNS y configuración de correo...',
+  http:      'Probando servicios web...',
+  ports:     'Escaneando puertos...',
+  tls:       'Revisando certificados...',
+  vulns:     'Buscando vulnerabilidades...',
+  osint:     'Consultando bases de datos externas...',
+  analysis:  'Calculando el nivel de riesgo...',
+  complete:  'Completado',
 }
 
 function VerificationPanel({ domainId, fqdn, token }:
@@ -105,9 +115,16 @@ function VerificationPanel({ domainId, fqdn, token }:
       </div>
 
       {verify.isError && (
-        <p className="text-sm text-red-600 mb-3">
-          No se encontró el registro DNS. Asegúrate de haberlo guardado y
-          espera unos minutos para que propague.
+        <p role="alert" className="text-sm text-red-600 mb-3">
+          {/* El backend distingue "el dominio no existe en DNS", "no
+              encontré el token" y "no pude consultar el DNS"; cada uno
+              se arregla de forma distinta, así que se muestra el motivo
+              real en vez de un mensaje único. */}
+          {getServerMessage(
+            verify.error,
+            'No se encontró el registro DNS. Asegúrate de haberlo ' +
+            'guardado y espera unos minutos para que propague.',
+          )}
         </p>
       )}
 
@@ -122,8 +139,9 @@ function VerificationPanel({ domainId, fqdn, token }:
 }
 
 function ScanProgress({ scan }: { scan: Scan }) {
-  const STAGES = ['discovery','dns','http','ports','tls','email','vulns','osint','scoring','complete']
-  const idx = STAGES.indexOf(scan.progress_stage ?? '')
+  const idx = STAGES.indexOf(
+    (scan.progress_stage ?? '') as typeof STAGES[number],
+  )
   const pct = idx >= 0 ? Math.round(((idx + 1) / STAGES.length) * 100) : 10
 
   return (
@@ -197,21 +215,27 @@ export function DomainDetail() {
 
   const downloadPdf = async () => {
     try {
-      const url = scansApi.pdfUrl(lastScan!.id)
-      const token = localStorage.getItem('access_token')
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) throw new Error('pdf failed')
-      const blob = await res.blob()
-      const objectUrl = URL.createObjectURL(blob)
+      // Por axios y no por fetch a pelo: el access token vive 15
+      // minutos, y el interceptor de client.ts lo refresca y reintenta.
+      // Con fetch leyendo localStorage, cualquier pestaña abierta más
+      // de 15 min fallaba con "no se pudo descargar" sin más remedio
+      // que recargar.
+      const { data } = await scansApi.pdf(lastScan!.id)
+      const objectUrl = URL.createObjectURL(data)
       const a = document.createElement('a')
       a.href = objectUrl
       a.download = `sajjad-${domain?.fqdn}-reporte.pdf`
+      // Firefox ignora el click de un <a> que no está en el documento.
+      document.body.appendChild(a)
       a.click()
-      URL.revokeObjectURL(objectUrl)
-    } catch {
-      toast.error('No se pudo descargar el reporte PDF.')
+      a.remove()
+      // Revocar en el mismo tick puede cancelar la descarga antes de
+      // que el navegador la haya empezado.
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000)
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(
+        err, 'No se pudo descargar el reporte PDF.',
+      ))
     }
   }
 

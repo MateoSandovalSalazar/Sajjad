@@ -13,9 +13,9 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.core.exceptions import Conflict, Forbidden, NotFound
+from app.core.exceptions import Conflict, NotFound
 from app.core.limits import get_limits
 from app.dependencies import DB, VerifiedUser
 from app.models.domain import Domain
@@ -51,13 +51,15 @@ async def add_domain(
     plan = user.plan
     limits = get_limits(plan)
 
-    # Count existing domains
-    result = await db.execute(
-        select(Domain).where(Domain.user_id == user.id)
+    # COUNT en la BD: traer todas las filas sólo para medirlas carga
+    # datos que no se usan.
+    current_count = await db.scalar(
+        select(func.count())
+        .select_from(Domain)
+        .where(Domain.user_id == user.id)
     )
-    current_count = len(result.scalars().all())
 
-    if current_count >= limits.max_domains:
+    if (current_count or 0) >= limits.max_domains:
         from app.core.exceptions import PlanLimitExceeded
 
         raise PlanLimitExceeded(
@@ -174,8 +176,8 @@ async def _get_user_domain(
         select(Domain).where(Domain.id == domain_id)
     )
     domain = result.scalar_one_or_none()
-    if domain is None:
+    # Mismo 404 para "no existe" y "no es tuyo": un 403 confirmaría que
+    # ese id existe y permitiría enumerar los dominios de otros.
+    if domain is None or domain.user_id != user_id:
         raise NotFound("Domain not found.")
-    if domain.user_id != user_id:
-        raise Forbidden("Access denied.")
     return domain

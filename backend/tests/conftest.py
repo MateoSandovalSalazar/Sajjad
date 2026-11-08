@@ -33,7 +33,11 @@ TEST_DATABASE_URL = os.environ.get(
 
 # Importar después de fijar TEST_DATABASE_URL, de ahí los E402.
 import app.models  # noqa: E402,F401  (registra todos los modelos)
-from app.database import Base, get_db  # noqa: E402
+from app.database import (  # noqa: E402
+    Base,
+    get_db,
+    get_sessionmaker,
+)
 from app.main import app as fastapi_app  # noqa: E402
 
 API = "/api/v1"
@@ -153,6 +157,11 @@ async def client(sessionmaker_):
                 raise
 
     fastapi_app.dependency_overrides[get_db] = _override_get_db
+    # El stream SSE abre sus propias sesiones cortas a través de esta
+    # factoría; sin sobreescribirla iría al Postgres de desarrollo.
+    fastapi_app.dependency_overrides[get_sessionmaker] = (
+        lambda: sessionmaker_
+    )
     transport = ASGITransport(app=fastapi_app)
     async with AsyncClient(
         transport=transport, base_url="http://test"

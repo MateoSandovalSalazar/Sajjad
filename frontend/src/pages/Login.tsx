@@ -112,6 +112,14 @@ export function Login() {
               </div>
             </div>
 
+            <div className="text-right">
+              <Link to="/forgot-password"
+                className="text-sm text-obsidian-600 hover:text-obsidian-800
+                  hover:underline">
+                ¿Olvidaste tu contraseña?
+              </Link>
+            </div>
+
             <button type="submit" disabled={loading}
               className="btn-primary w-full flex items-center justify-center
                 gap-2 py-3">

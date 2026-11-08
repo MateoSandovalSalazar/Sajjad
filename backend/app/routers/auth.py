@@ -5,6 +5,7 @@ POST /auth/register          → create account + send verify email
 POST /auth/login             → issue access + refresh tokens
 POST /auth/refresh           → rotate access token
 GET  /auth/verify-email      → activate account via token link
+POST /auth/resend-verification → reenvía el correo de verificación
 POST /auth/forgot-password   → send reset email
 POST /auth/reset-password    → apply new password from token
 GET  /auth/me                → current user info (requires auth)
@@ -27,6 +28,7 @@ from app.schemas.auth import (
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
+    ResendVerificationRequest,
     ResetPasswordRequest,
     TokenResponse,
 )
@@ -66,6 +68,20 @@ async def verify_email(
 ):
     await auth_service.verify_email(token, db)
     return {"message": "Email verified. You can now log in."}
+
+
+@router.post("/resend-verification", status_code=202)
+@limiter.limit(rl.VERIFICATION_RESEND)
+async def resend_verification(
+    request: Request, payload: ResendVerificationRequest, db: DB
+):
+    await auth_service.resend_verification_email(payload.email, db)
+    return {
+        "message": (
+            "If that email is registered and not yet verified, "
+            "you will receive a new verification link shortly."
+        )
+    }
 
 
 @router.post("/forgot-password", status_code=202)

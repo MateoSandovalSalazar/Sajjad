@@ -25,14 +25,13 @@ from sqlalchemy.orm import selectinload
 from app.config import get_settings
 from app.core import ratelimit as rl
 from app.core.exceptions import (
-    Forbidden,
     NotFound,
     PlanLimitExceeded,
     ScanAlreadyRunning,
 )
 from app.core.limits import get_limits, is_new_billing_month
 from app.core.ratelimit import limiter
-from app.dependencies import DB, VerifiedUser
+from app.dependencies import DB, SessionFactory, VerifiedUser
 from app.models.domain import Domain
 from app.models.scan import Scan, ScanStatus
 from app.schemas.scan import (
@@ -72,7 +71,12 @@ async def launch_scan(
         sub.scans_this_month = 0
         sub.scans_reset_at = datetime.now(timezone.utc)
 
-    if sub and sub.scans_this_month >= limits.max_scans_per_month:
+    # Antes la comprobación era `if sub and ...`: una cuenta sin fila de
+    # suscripción se saltaba el límite por completo y podía escanear sin
+    # tope. Sin suscripción el plan es free, así que el contador vale 0
+    # y el límite de free aplica igual.
+    scans_used = sub.scans_this_month if sub else 0
+    if scans_used >= limits.max_scans_per_month:
         raise PlanLimitExceeded(
             f"Monthly scan limit reached ({limits.max_scans_per_month}). "
             f"Resets next month or upgrade your plan."
@@ -294,48 +298,77 @@ def _generate_pdf_sync(
     return str(generated)
 
 
+# Cada sondeo abre su propia sesión y la cierra: así el stream no
+# retiene una conexión del pool mientras duerme. Y el stream entero
+# tiene tope de duración, porque un escaneo que se queda colgado
+# (worker caído) dejaría la conexión abierta indefinidamente.
+_STREAM_POLL_SECONDS = 2
+_STREAM_MAX_SECONDS = 15 * 60
+
+
 @router.get("/scans/{scan_id}/stream")
 async def stream_progress(
     scan_id: uuid.UUID,
     request: Request,
     user: VerifiedUser,
     db: DB,
+    sessionmaker: SessionFactory,
 ):
     """
-    Server-Sent Events stream for real-time scan progress.
-    Polls DB every 2s and emits JSON events until terminal.
+    Progreso del escaneo en vivo por Server-Sent Events.
+
+    Sondea la BD cada 2 s y emite un evento JSON hasta que el escaneo
+    termina, el cliente se desconecta o se agota el tope de tiempo.
     """
     # Comprueba la propiedad del scan antes de abrir el stream; el
     # resultado no se usa, sólo importa que no lance.
     await _get_user_scan(scan_id, user.id, db)
 
     async def _event_generator() -> AsyncGenerator[str, None]:
+        deadline = (
+            asyncio.get_running_loop().time() + _STREAM_MAX_SECONDS
+        )
+
         while True:
             if await request.is_disconnected():
                 break
 
-            # Refresh from DB
-            result = await db.execute(
-                select(Scan).where(Scan.id == scan_id)
-            )
-            s = result.scalar_one_or_none()
-            if s is None:
-                break
+            # Sesión corta por sondeo: se abre, lee y cierra. No se
+            # reutiliza la sesión de la petición porque FastAPI la
+            # cierra al terminar las dependencias, antes de que este
+            # generador acabe de emitir.
+            async with sessionmaker() as session:
+                result = await session.execute(
+                    select(Scan).where(Scan.id == scan_id)
+                )
+                s = result.scalar_one_or_none()
+                if s is None:
+                    break
+                event = {
+                    "scan_id": str(s.id),
+                    "status": s.status.value,
+                    "stage": s.progress_stage,
+                    "risk_score": s.risk_score,
+                    "risk_level": s.risk_level,
+                    "findings_count": s.findings_count,
+                }
+                terminal = s.is_terminal
 
-            event = {
-                "scan_id": str(s.id),
-                "status": s.status.value,
-                "stage": s.progress_stage,
-                "risk_score": s.risk_score,
-                "risk_level": s.risk_level,
-                "findings_count": s.findings_count,
-            }
             yield f"data: {json.dumps(event)}\n\n"
 
-            if s.is_terminal:
+            if terminal:
                 break
 
-            await asyncio.sleep(2)
+            if asyncio.get_running_loop().time() >= deadline:
+                # El cliente debe volver a sondear por HTTP normal en
+                # vez de quedarse esperando un stream que no acaba.
+                yield (
+                    "event: timeout\n"
+                    f"data: {json.dumps({'scan_id': str(scan_id)})}\n\n"
+                )
+                break
+
+            await asyncio.sleep(_STREAM_POLL_SECONDS)
 
     return StreamingResponse(
         _event_generator(),
@@ -393,10 +426,10 @@ async def _get_verified_domain(
         select(Domain).where(Domain.id == domain_id)
     )
     domain = result.scalar_one_or_none()
-    if domain is None:
+    # Un 403 sobre el dominio de otro confirmaría que ese id existe;
+    # 404 no distingue "no es tuyo" de "no existe".
+    if domain is None or domain.user_id != user_id:
         raise NotFound("Domain not found.")
-    if domain.user_id != user_id:
-        raise Forbidden("Access denied.")
     if not domain.is_verified:
         from app.core.exceptions import DomainNotVerified
 

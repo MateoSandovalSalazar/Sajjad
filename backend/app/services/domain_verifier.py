@@ -13,6 +13,7 @@ import logging
 
 import dns.asyncresolver
 import dns.exception
+import dns.resolver
 
 from app.core.exceptions import DomainNotVerified
 
@@ -43,8 +44,9 @@ async def verify_domain_ownership(
             return True
 
     raise DomainNotVerified(
-        f"Token '{expected_token}' not found in TXT records for "
-        f"'{fqdn}'. Add the TXT record and try again."
+        f"No se encontró el token '{expected_token}' en los registros "
+        f"TXT de '{fqdn}'. Añade el registro TXT en la raíz del "
+        f"dominio y vuelve a intentarlo."
     )
 
 
@@ -61,19 +63,34 @@ async def _fetch_txt_records(fqdn: str) -> list[str]:
                 )
                 records.append(decoded)
         return records
-    except dns.exception.NXDOMAIN:
+    except dns.resolver.NXDOMAIN:
+        # OJO: NXDOMAIN vive en dns.resolver, no en dns.exception.
+        # Apuntar al módulo equivocado hacía que evaluar esta cláusula
+        # lanzara AttributeError, y TODO fallo de DNS terminaba en un
+        # 500 en vez del mensaje de "añade el registro TXT".
         raise DomainNotVerified(
-            f"Domain '{fqdn}' does not exist in DNS."
+            f"El dominio '{fqdn}' no existe en el DNS. "
+            f"Revisa que esté bien escrito."
         )
+    except dns.resolver.NoAnswer:
+        # El dominio existe pero no tiene ningún TXT: es el caso normal
+        # de quien aún no ha añadido el registro.
+        return []
     except (
         dns.exception.Timeout,
         dns.resolver.NoNameservers,
+        dns.resolver.LifetimeTimeout,
     ) as exc:
-        logger.warning(
-            "DNS lookup failed for %s: %s", fqdn, exc
-        )
+        logger.warning("Consulta DNS fallida para %s: %s", fqdn, exc)
         raise DomainNotVerified(
-            f"Could not reach DNS for '{fqdn}'. Try again later."
+            f"No se pudo consultar el DNS de '{fqdn}'. "
+            f"Inténtalo de nuevo en unos minutos."
         )
-    except dns.resolver.NoAnswer:
-        return []
+    except dns.exception.DNSException as exc:
+        # Red de seguridad: cualquier otro fallo de dnspython es un
+        # problema de DNS del usuario, no un error interno nuestro.
+        logger.warning("Error de DNS inesperado para %s: %s", fqdn, exc)
+        raise DomainNotVerified(
+            f"No se pudo verificar '{fqdn}' por un problema de DNS. "
+            f"Inténtalo de nuevo en unos minutos."
+        )
