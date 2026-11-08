@@ -1,7 +1,7 @@
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
-import uuid
 
 VALID_CATEGORIES = frozenset({
     "subdomain", "port", "cert", "cred",

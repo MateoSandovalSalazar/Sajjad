@@ -46,6 +46,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      # Sin esto, una migración nueva exige reconstruir la imagen para
+      # que el contenedor la vea. En producción NO se monta: allí la
+      # imagen inmutable es justamente lo que se quiere.
+      - .:/app/backend
+      - ../sajjad:/app/sajjad
     restart: "no"
 
   # ── API FastAPI ──────────────────────────────────────────────
@@ -66,6 +72,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://sajjad:sajjad@postgres:5432/sajjad_db
       REDIS_URL: redis://redis:6379/0
+      PDF_STORAGE_PATH: /app/backend/reports
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,7 +82,7 @@ services:
       - .:/app/backend             # hot-reload del código backend
       - ../sajjad:/app/sajjad      # hot-reload del paquete de escaneo
       - pdf_storage:/app/backend/reports
-      - /home/patitasking/go/bin:/go/bin:ro
+      - ${GO_BIN:-${HOME}/go/bin}:/go/bin:ro
     restart: unless-stopped
 
   # ── Worker Celery (tareas de escaneo) ───────────────────────
@@ -92,16 +99,23 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://sajjad:sajjad@postgres:5432/sajjad_db
       REDIS_URL: redis://redis:6379/0
+      PDF_STORAGE_PATH: /app/backend/reports
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # naabu y nmap hacen SYN scan, que necesita raw sockets. Sin esto
+    # la etapa de puertos degrada en silencio a connect-scan (o falla)
+    # y el desarrollo no reproduce lo que pasa en producción.
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
     volumes:
       - .:/app/backend
       - ../sajjad:/app/sajjad      # hot-reload del paquete de escaneo
       - pdf_storage:/app/backend/reports
-      - /home/patitasking/go/bin:/go/bin:ro
+      - ${GO_BIN:-${HOME}/go/bin}:/go/bin:ro
     restart: unless-stopped
 
   # ── Celery Beat (programador de scans automáticos) ──────────

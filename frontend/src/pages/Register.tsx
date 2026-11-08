@@ -141,6 +141,20 @@ export function Register() {
               {loading ? <Spinner size="sm" /> : null}
               {loading ? 'Creando cuenta...' : 'Crear cuenta gratis'}
             </button>
+
+            <p className="text-center text-xs text-gray-400 mt-4">
+              Al crear la cuenta aceptas los{' '}
+              <Link to="/legal/terminos"
+                className="text-obsidian-700 hover:underline">
+                Términos de Servicio
+              </Link>
+              {' '}y la{' '}
+              <Link to="/legal/privacidad"
+                className="text-obsidian-700 hover:underline">
+                Política de Privacidad
+              </Link>
+              .
+            </p>
           </form>
 
           <p className="text-center text-sm text-gray-500 mt-6">

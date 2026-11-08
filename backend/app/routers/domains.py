@@ -8,10 +8,11 @@ POST   /domains/{id}/verify  → trigger DNS TXT check
 GET    /domains/{id}/instructions → get TXT record instructions
 """
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from sqlalchemy import select
 
 from app.core.exceptions import Conflict, Forbidden, NotFound
@@ -24,6 +25,8 @@ from app.schemas.domain import (
     VerificationInstructions,
 )
 from app.services.domain_verifier import verify_domain_ownership
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/domains", tags=["domains"])
 
@@ -40,11 +43,12 @@ async def list_domains(user: VerifiedUser, db: DB):
 
 @router.post("", response_model=DomainResponse, status_code=201)
 async def add_domain(
+    request: Request,
     payload: DomainCreate,
     user: VerifiedUser,
     db: DB,
 ):
-    plan = user.subscription.plan if user.subscription else "free"
+    plan = user.plan
     limits = get_limits(plan)
 
     # Count existing domains
@@ -71,9 +75,31 @@ async def add_domain(
     if existing.scalar_one_or_none():
         raise Conflict(f"Domain '{payload.fqdn}' already added.")
 
-    domain = Domain(user_id=user.id, fqdn=payload.fqdn)
+    # El schema ya obliga a payload.authorized=True; aquí se deja
+    # constancia de quién lo declaró, cuándo y desde dónde.
+    domain = Domain(
+        user_id=user.id,
+        fqdn=payload.fqdn,
+        authorized_at=datetime.now(timezone.utc),
+        authorized_ip=(
+            request.client.host if request.client else None
+        ),
+        authorized_user_agent=(
+            request.headers.get("user-agent", "")[:512] or None
+        ),
+    )
     db.add(domain)
-    await db.flush()
+    logger.info(
+        "Autorización de escaneo registrada: user=%s dominio=%s ip=%s",
+        user.id,
+        payload.fqdn,
+        request.client.host if request.client else "desconocida",
+    )
+    # Commit explícito: garantiza que el dominio quede persistido y
+    # visible antes de responder. (El código tras `yield` en get_db
+    # corre después de enviar la respuesta, así que un commit allí
+    # llegaría tarde para una lectura inmediata del cliente.)
+    await db.commit()
     return domain
 
 
@@ -94,6 +120,7 @@ async def remove_domain(
 ):
     domain = await _get_user_domain(domain_id, user.id, db)
     await db.delete(domain)
+    await db.commit()
 
 
 @router.post("/{domain_id}/verify", response_model=DomainResponse)
@@ -109,7 +136,7 @@ async def trigger_verify(
     )
 
     domain.verified_at = datetime.now(timezone.utc)
-    await db.flush()
+    await db.commit()
     return domain
 
 
@@ -124,10 +151,11 @@ async def get_instructions(
 ):
     domain = await _get_user_domain(domain_id, user.id, db)
     return VerificationInstructions(
-        domain=domain.fqdn,
-        record_type="TXT",
-        record_name=domain.fqdn,
-        record_value=domain.verification_token,
+        fqdn=domain.fqdn,
+        verification_token=domain.verification_token,
+        dns_record_type="TXT",
+        dns_record_name=domain.fqdn,
+        dns_record_value=domain.verification_token,
         instructions=(
             f"Add a TXT DNS record to '{domain.fqdn}' with the "
             f"value '{domain.verification_token}'. "

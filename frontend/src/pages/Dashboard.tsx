@@ -1,23 +1,16 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueries } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Globe, Plus, ChevronRight, ShieldCheck, AlertTriangle } from 'lucide-react'
 import { domainsApi } from '../api/domains'
 import { scansApi } from '../api/scans'
 import { useAuthStore } from '../store/auth'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { RiskScoreGauge } from '../components/RiskScoreGauge'
 import { Badge } from '../components/ui/Badge'
 import { Spinner } from '../components/ui/Spinner'
 import type { Domain, Scan } from '../types'
 
-function DomainCard({ domain }: { domain: Domain }) {
-  const { data: scans } = useQuery({
-    queryKey: ['scans', domain.id],
-    queryFn: () => scansApi.listByDomain(domain.id).then(r => r.data),
-    enabled: domain.is_verified,
-  })
-
-  const last = scans?.[0]
-
+function DomainCard({ domain, last }: { domain: Domain; last?: Scan | null }) {
   return (
     <Link to={`/domains/${domain.id}`}
       className="card p-5 flex items-center gap-4 hover:shadow-md
@@ -75,7 +68,7 @@ function DomainCard({ domain }: { domain: Domain }) {
           </p>
         ) : (
           <p className="text-xs text-gray-400 mt-1">
-            {last?.status === 'running'
+            {last?.status === 'running' || last?.status === 'pending'
               ? 'Escaneo en progreso...'
               : 'Haz clic para escanear'}
           </p>
@@ -129,12 +122,30 @@ function SummaryBar({ scans }: { scans: Scan[] }) {
 }
 
 export function Dashboard() {
+  useDocumentTitle('Panel')
   const { user } = useAuthStore()
 
   const { data: domains, isLoading } = useQuery({
     queryKey: ['domains'],
     queryFn: () => domainsApi.list().then(r => r.data),
   })
+
+  // Traemos el historial de scans de cada dominio una sola vez. Alimenta
+  // tanto el resumen agregado como cada tarjeta (sin fetches duplicados).
+  const scanResults = useQueries({
+    queries: (domains ?? []).map(d => ({
+      queryKey: ['scans', d.id],
+      queryFn: () => scansApi.listByDomain(d.id).then(r => r.data),
+      enabled: d.is_verified,
+    })),
+  })
+
+  const lastByDomain = new Map<string, Scan | undefined>()
+  ;(domains ?? []).forEach((d, i) => {
+    lastByDomain.set(d.id, scanResults[i]?.data?.[0])
+  })
+  const lastScans = Array.from(lastByDomain.values())
+    .filter((s): s is Scan => !!s)
 
   if (isLoading) return (
     <div className="flex items-center justify-center h-64">
@@ -184,8 +195,7 @@ export function Dashboard() {
         </div>
       ) : (
         <>
-          <SummaryBar scans={domains.flatMap(d => (d as Domain & { last_scan?: Scan })
-            .last_scan ? [(d as Domain & { last_scan: Scan }).last_scan] : [])} />
+          <SummaryBar scans={lastScans} />
 
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-bold text-gray-900">Tus dominios</h2>
@@ -195,7 +205,9 @@ export function Dashboard() {
           </div>
 
           <div className="space-y-3">
-            {domains.map(d => <DomainCard key={d.id} domain={d} />)}
+            {domains.map(d =>
+              <DomainCard key={d.id} domain={d} last={lastByDomain.get(d.id)} />
+            )}
           </div>
         </>
       )}

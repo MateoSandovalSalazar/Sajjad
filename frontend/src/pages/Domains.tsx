@@ -5,17 +5,21 @@ import { Plus, Globe, ShieldCheck, AlertTriangle, Trash2, ChevronRight } from 'l
 import { domainsApi } from '../api/domains'
 import { getErrorMessage } from '../lib/errors'
 import { toast } from '../store/toast'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { Spinner } from '../components/ui/Spinner'
 import type { Domain } from '../types'
 
 function AddDomainForm({ onClose }: { onClose: () => void }) {
   const [fqdn, setFqdn] = useState('')
+  const [authorized, setAuthorized] = useState(false)
   const [error, setError] = useState('')
   const qc = useQueryClient()
 
   const add = useMutation({
     mutationFn: () =>
-      domainsApi.create(fqdn.trim().toLowerCase()).then(r => r.data),
+      domainsApi
+        .create(fqdn.trim().toLowerCase(), authorized)
+        .then(r => r.data),
     onSuccess: (created) => {
       // El POST devuelve el dominio creado (autoritativo). Lo insertamos
       // directo en la caché en vez de invalidar: el backend a veces no
@@ -45,15 +49,32 @@ function AddDomainForm({ onClose }: { onClose: () => void }) {
         <input value={fqdn} onChange={e => setFqdn(e.target.value)}
           placeholder="empresa.com"
           className="input flex-1"
-          onKeyDown={e => e.key === 'Enter' && add.mutate()}
+          onKeyDown={e =>
+            e.key === 'Enter' && fqdn && authorized && add.mutate()}
         />
-        <button onClick={() => add.mutate()} disabled={!fqdn || add.isPending}
+        <button onClick={() => add.mutate()}
+          disabled={!fqdn || !authorized || add.isPending}
           className="btn-primary flex items-center gap-2">
           {add.isPending ? <Spinner size="sm" /> : <Plus className="h-4 w-4" />}
           Agregar
         </button>
         <button onClick={onClose} className="btn-secondary">Cancelar</button>
       </div>
+
+      {/* Declaración de propiedad. No es un trámite: es la base legal
+          que respalda cada escaneo, y queda registrada con fecha e IP. */}
+      <label className="flex items-start gap-2.5 mt-4 cursor-pointer
+        rounded-xl border border-gold-500/30 bg-gold-50/40 px-4 py-3">
+        <input type="checkbox" checked={authorized}
+          onChange={e => setAuthorized(e.target.checked)}
+          className="mt-0.5 h-4 w-4 shrink-0 accent-gold-600" />
+        <span className="text-sm text-gray-700">
+          Declaro que soy el propietario de este dominio, o que cuento
+          con autorización expresa por escrito de su propietario, para
+          que Sajjad analice su infraestructura expuesta. Entiendo que
+          esta declaración queda registrada.
+        </span>
+      </label>
       <p className="text-xs text-gray-400 mt-2">
         Solo el dominio raíz, sin https:// — ej: <code>empresa.com</code>
       </p>
@@ -62,6 +83,7 @@ function AddDomainForm({ onClose }: { onClose: () => void }) {
 }
 
 export function Domains() {
+  useDocumentTitle('Mis dominios')
   const [showForm, setShowForm] = useState(false)
   const qc = useQueryClient()
 

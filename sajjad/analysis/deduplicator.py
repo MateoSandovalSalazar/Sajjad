@@ -10,7 +10,7 @@ When duplicates are found, the highest-severity instance is kept.
 
 import logging
 
-from sajjad.models.finding import Finding, SEVERITY_RANK
+from sajjad.models.finding import SEVERITY_RANK, Finding
 
 logger = logging.getLogger(__name__)
 

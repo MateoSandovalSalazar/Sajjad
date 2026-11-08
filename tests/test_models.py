@@ -1,4 +1,5 @@
 import pytest
+
 from sajjad.models.finding import Finding
 
 

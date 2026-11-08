@@ -11,11 +11,11 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from celery import shared_task
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
+from app.core.limits import FREE_PLAN, TRIAL_PLAN
 from app.models.domain import Domain
 from app.models.scan import Finding as FindingORM
 from app.models.scan import Scan, ScanStatus
@@ -107,9 +107,19 @@ def _persist_results(scan_id: str, result, engine) -> None:
         scan.open_ports_count = result.total_open_ports
         scan.findings_count = len(result.findings)
         scan.findings_summary = result.summary
+        # open_ports alimenta la tabla "Puertos Abiertos por Host"
+        # del PDF, que se regenera desde raw_data: si no se guarda,
+        # el reporte sale diciendo que no hay puertos abiertos
+        # aunque el escaneo sí los haya encontrado.
         scan.raw_data = {
             "subdomains": result.subdomains[:500],
             "live_hosts": result.live_hosts[:200],
+            "open_ports": {
+                host: sorted(ports)
+                for host, ports in list(
+                    (result.open_ports or {}).items()
+                )[:200]
+            },
         }
 
         for f in result.findings:
@@ -223,7 +233,10 @@ def schedule_due_scans() -> dict:
             if sub is None or sub.status != SubscriptionStatus.ACTIVE:
                 continue
 
-            limits = PLANS.get(sub.plan)
+            # effective_plan y no sub.plan: un trial vencido no debe
+            # seguir recibiendo escaneos automáticos hasta que el beat
+            # de expiración lo degrade.
+            limits = PLANS.get(sub.effective_plan)
             if limits is None or limits.scan_interval_days is None:
                 continue
 
@@ -253,17 +266,90 @@ def schedule_due_scans() -> dict:
                 user_id=user.id,
             )
             db.add(new_scan)
-            db.flush()
+            # Commit ANTES de encolar: el worker lee el scan por id,
+            # así que debe estar persistido antes del delay (misma
+            # race corregida en el router de scans).
+            db.commit()
+            new_scan_id = new_scan.id
 
-            run_scan.delay(str(new_scan.id))
+            run_scan.delay(str(new_scan_id))
             launched += 1
             logger.info(
                 "Auto-launched scan for %s (plan=%s)",
                 domain.fqdn,
-                sub.plan,
+                sub.effective_plan,
             )
-
-        db.commit()
 
     logger.info("schedule_due_scans: launched %d scans", launched)
     return {"launched": launched}
+
+
+@celery_app.task(
+    name="app.workers.scan_task.reset_monthly_scan_counts"
+)
+def reset_monthly_scan_counts() -> dict:
+    """
+    Beat task (diaria): reinicia el contador mensual de escaneos de las
+    suscripciones cuyo mes calendario cambió. Es el respaldo del reset
+    perezoso que ya ocurre al lanzar un escaneo; mantiene el contador
+    correcto también para usuarios que no escanean.
+    """
+    from app.core.limits import is_new_billing_month
+
+    engine = _sync_engine()
+    now = datetime.now(timezone.utc)
+    reset = 0
+
+    with Session(engine) as db:
+        subs = db.execute(select(Subscription)).scalars().all()
+        for sub in subs:
+            if is_new_billing_month(sub.scans_reset_at, now):
+                sub.scans_this_month = 0
+                sub.scans_reset_at = now
+                reset += 1
+        db.commit()
+
+    logger.info(
+        "reset_monthly_scan_counts: reset %d subscriptions", reset
+    )
+    return {"reset": reset}
+
+
+@celery_app.task(
+    name="app.workers.scan_task.expire_trials"
+)
+def expire_trials() -> dict:
+    """
+    Beat task (diaria): degrada a free las pruebas gratuitas vencidas.
+
+    Conserva `trial_ends_at` a propósito — es la marca de que esa
+    cuenta ya consumió su prueba, y `_start_trial` la usa para no
+    otorgar una segunda.
+    """
+    engine = _sync_engine()
+    now = datetime.now(timezone.utc)
+    expired = 0
+
+    with Session(engine) as db:
+        subs = (
+            db.execute(
+                select(Subscription).where(
+                    Subscription.plan == TRIAL_PLAN,
+                    Subscription.trial_ends_at.isnot(None),
+                    Subscription.trial_ends_at <= now,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for sub in subs:
+            sub.plan = FREE_PLAN
+            sub.status = SubscriptionStatus.ACTIVE
+            expired += 1
+            logger.info(
+                "Trial expirado para user=%s → free", sub.user_id
+            )
+        db.commit()
+
+    logger.info("expire_trials: %d pruebas vencidas", expired)
+    return {"expired": expired}

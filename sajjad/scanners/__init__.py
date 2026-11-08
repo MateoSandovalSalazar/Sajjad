@@ -42,7 +42,7 @@ def run_tool(cmd: list[str], timeout: int = 300) -> str:
         if result.returncode != 0 and result.stderr:
             logger.warning(
                 "%s stderr: %s",
-                tool_name,
+                cmd[0],
                 result.stderr[:500],
             )
         return result.stdout

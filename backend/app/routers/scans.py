@@ -22,13 +22,16 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import desc, select
 from sqlalchemy.orm import selectinload
 
+from app.config import get_settings
+from app.core import ratelimit as rl
 from app.core.exceptions import (
     Forbidden,
     NotFound,
     PlanLimitExceeded,
     ScanAlreadyRunning,
 )
-from app.core.limits import get_limits
+from app.core.limits import get_limits, is_new_billing_month
+from app.core.ratelimit import limiter
 from app.dependencies import DB, VerifiedUser
 from app.models.domain import Domain
 from app.models.scan import Scan, ScanStatus
@@ -44,7 +47,9 @@ router = APIRouter(tags=["scans"])
 
 
 @router.post("/scans", response_model=ScanOut, status_code=202)
+@limiter.limit(rl.SCAN_LAUNCH)
 async def launch_scan(
+    request: Request,
     payload: ScanCreate,
     user: VerifiedUser,
     db: DB,
@@ -54,10 +59,19 @@ async def launch_scan(
     )
 
     # Enforce plan limits
-    plan = user.subscription.plan if user.subscription else "free"
+    plan = user.plan
     limits = get_limits(plan)
 
     sub = user.subscription
+    # Reset mensual perezoso: si cambiamos de mes desde el último reset,
+    # el contador vuelve a 0 antes de validar el límite. (No depende de
+    # que un job programado corra en un momento exacto.)
+    if sub and is_new_billing_month(
+        sub.scans_reset_at, datetime.now(timezone.utc)
+    ):
+        sub.scans_this_month = 0
+        sub.scans_reset_at = datetime.now(timezone.utc)
+
     if sub and sub.scans_this_month >= limits.max_scans_per_month:
         raise PlanLimitExceeded(
             f"Monthly scan limit reached ({limits.max_scans_per_month}). "
@@ -80,11 +94,13 @@ async def launch_scan(
 
     scan = Scan(domain_id=domain.id, user_id=user.id)
     db.add(scan)
-    await db.flush()
+    # Persistimos el scan (con su id) ANTES de encolar la tarea: el worker
+    # lee el scan por id, así que debe existir en la BD antes de lanzarlo.
+    await db.commit()
 
     task = run_scan.delay(str(scan.id))
     scan.celery_task_id = task.id
-    await db.flush()
+    await db.commit()
 
     return scan
 
@@ -115,7 +131,7 @@ async def get_scan_score(
     Available on free plan. Findings are withheld.
     """
     scan = await _get_user_scan(scan_id, user.id, db)
-    plan = user.subscription.plan if user.subscription else "free"
+    plan = user.plan
     limits = get_limits(plan)
 
     domain_result = await db.execute(
@@ -144,7 +160,7 @@ async def get_scan_findings(
     user: VerifiedUser,
     db: DB,
 ):
-    plan = user.subscription.plan if user.subscription else "free"
+    plan = user.plan
     if not get_limits(plan).can_see_findings:
         raise PlanLimitExceeded(
             "Detailed findings are not available on the free plan. "
@@ -168,8 +184,9 @@ async def download_pdf(
     user: VerifiedUser,
     db: DB,
 ):
-    plan = user.subscription.plan if user.subscription else "free"
-    if not get_limits(plan).can_download_pdf:
+    plan = user.plan
+    limits = get_limits(plan)
+    if not limits.can_download_pdf:
         raise PlanLimitExceeded(
             "PDF download requires a paid plan. "
             "Upgrade to Starter or higher."
@@ -189,11 +206,20 @@ async def download_pdf(
     if scan.status != ScanStatus.COMPLETED:
         raise NotFound("Scan not yet complete.")
 
-    pdf_path = scan.pdf_path
-    if not pdf_path or not Path(pdf_path).exists():
+    # La ruta depende del branding: así, si el usuario cambia de
+    # plan, no se le sirve el PDF cacheado con la marca anterior.
+    target = _pdf_path_for(scan.id, limits.white_label)
+    if target.exists():
+        pdf_path = str(target)
+    else:
         pdf_path = await asyncio.get_event_loop().run_in_executor(
-            None, _generate_pdf_sync, scan
+            None,
+            _generate_pdf_sync,
+            scan,
+            user.company or "",
+            limits.white_label,
         )
+    if scan.pdf_path != pdf_path:
         scan.pdf_path = pdf_path
         await db.flush()
 
@@ -204,7 +230,17 @@ async def download_pdf(
     )
 
 
-def _generate_pdf_sync(scan: Scan) -> str:
+def _pdf_path_for(scan_id: uuid.UUID, white_label: bool) -> Path:
+    reports_dir = Path(get_settings().pdf_storage_path)
+    suffix = "-wl" if white_label else ""
+    return reports_dir / f"scan-{scan_id}{suffix}.pdf"
+
+
+def _generate_pdf_sync(
+    scan: Scan,
+    company_name: str = "",
+    white_label: bool = False,
+) -> str:
     from sajjad.models.finding import Finding as CoreFinding
     from sajjad.models.scan_result import ScanResult
     from sajjad.reporting.pdf_generator import generate_pdf
@@ -236,17 +272,25 @@ def _generate_pdf_sync(scan: Scan) -> str:
         completed_at=scan.completed_at,
         subdomains=raw.get("subdomains", []),
         live_hosts=raw.get("live_hosts", []),
+        open_ports={
+            host: [int(p) for p in ports]
+            for host, ports in (raw.get("open_ports") or {}).items()
+        },
         findings=core_findings,
         risk_score=scan.risk_score or 0,
         risk_level=scan.risk_level or "low",
         summary=scan.findings_summary or {},
     )
 
-    reports_dir = Path("/app/backend/reports")
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    output_path = reports_dir / f"scan-{scan.id}.pdf"
+    output_path = _pdf_path_for(scan.id, white_label)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    generated = generate_pdf(result, str(output_path))
+    generated = generate_pdf(
+        result,
+        str(output_path),
+        company_name=company_name,
+        white_label=white_label,
+    )
     return str(generated)
 
 
@@ -261,10 +305,11 @@ async def stream_progress(
     Server-Sent Events stream for real-time scan progress.
     Polls DB every 2s and emits JSON events until terminal.
     """
-    scan = await _get_user_scan(scan_id, user.id, db)
+    # Comprueba la propiedad del scan antes de abrir el stream; el
+    # resultado no se usa, sólo importa que no lance.
+    await _get_user_scan(scan_id, user.id, db)
 
     async def _event_generator() -> AsyncGenerator[str, None]:
-        prev_stage = None
         while True:
             if await request.is_disconnected():
                 break

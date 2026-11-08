@@ -1,5 +1,4 @@
-import pytest
-from sajjad.analysis.scorer import calculate_score, _risk_level
+from sajjad.analysis.scorer import _risk_level, calculate_score
 from sajjad.models.finding import Finding
 from sajjad.models.scan_result import ScanResult
 

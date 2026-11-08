@@ -1,0 +1,187 @@
+# Sajjad — despliegue de producción (VPS + Docker Compose).
+#
+# Diferencias clave con docker-compose.yml (desarrollo):
+#   · Postgres y Redis NO exponen puertos al exterior — sólo se
+#     alcanzan por la red interna de compose.
+#   · Sin --reload ni volúmenes de código: la imagen es inmutable.
+#   · Caddy termina TLS y es lo único publicado (80/443).
+#   · Contraseñas y secretos vienen de .env, nunca del compose.
+#   · Backups diarios de Postgres.
+#
+# Uso:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# El worker necesita CAP_NET_RAW para los SYN scan de naabu/nmap.
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?falta POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-sajjad_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: always
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: alembic upgrade head
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 4
+      --proxy-headers
+      --forwarded-allow-ips=*
+      --log-level info
+    env_file: .env
+    environment:
+      API_ENV: production
+    volumes:
+      - pdf_storage:/app/backend/reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # /health/ready comprueba Postgres y Redis, no sólo el proceso.
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen(
+          'http://localhost:8000/health/ready', timeout=5
+          ).status == 200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: always
+
+  worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: >
+      celery -A app.workers.celery_app worker
+      --loglevel=info
+      --concurrency=${CELERY_CONCURRENCY:-2}
+      --max-tasks-per-child=20
+    env_file: .env
+    environment:
+      API_ENV: production
+    volumes:
+      - pdf_storage:/app/backend/reports
+    # naabu y nmap hacen SYN scan: necesitan raw sockets. Es la
+    # capacidad mínima que hace falta — no usar privileged: true.
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+
+  beat:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: >
+      celery -A app.workers.celery_app beat
+      --loglevel=info
+      --schedule=/tmp/celerybeat-schedule
+    env_file: .env
+    environment:
+      API_ENV: production
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: always
+
+  # ── Reverse proxy + TLS automático ──────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SAJJAD_DOMAIN: ${SAJJAD_DOMAIN:?falta SAJJAD_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../frontend/dist:/srv/frontend:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: always
+
+  # ── Backup diario de Postgres ───────────────────────────────
+  # Un SaaS de seguridad sin backups no es defendible. Retención de
+  # 14 días; copia los .sql.gz fuera del VPS periódicamente.
+  backup:
+    image: postgres:16-alpine
+    env_file: .env
+    volumes:
+      - ./backups:/backups
+    entrypoint: >
+      sh -c 'while true; do
+        ts=$$(date +%Y%m%d-%H%M%S);
+        PGPASSWORD="$$POSTGRES_PASSWORD" pg_dump
+          -h postgres -U "$$POSTGRES_USER" "$$POSTGRES_DB"
+          | gzip > "/backups/sajjad-$$ts.sql.gz"
+          && echo "backup ok: sajjad-$$ts.sql.gz"
+          || echo "BACKUP FALLIDO";
+        find /backups -name "sajjad-*.sql.gz" -mtime +14 -delete;
+        sleep 86400;
+      done'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  postgres_data:
+  redis_data:
+  pdf_storage:
+  caddy_data:
+  caddy_config:

@@ -14,6 +14,13 @@ def _clean_domain(v: str) -> str:
 class DomainCreate(BaseModel):
     fqdn: str
 
+    # Declaración explícita de propiedad. Campo OBLIGATORIO y sin
+    # valor por defecto a propósito: Pydantic no ejecuta los
+    # validadores sobre los defaults, así que con `= False` bastaba
+    # con omitir el campo para saltarse la comprobación entera.
+    # Un consentimiento no puede tener valor por defecto.
+    authorized: bool
+
     @field_validator("fqdn")
     @classmethod
     def normalize(cls, v: str) -> str:
@@ -22,6 +29,17 @@ class DomainCreate(BaseModel):
             raise ValueError("Enter a valid domain (e.g. example.com).")
         if len(v) > 255:
             raise ValueError("Domain is too long.")
+        return v
+
+    @field_validator("authorized")
+    @classmethod
+    def must_authorize(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError(
+                "Debes declarar que eres el propietario del dominio "
+                "o que cuentas con autorización por escrito para "
+                "analizarlo."
+            )
         return v
 
 

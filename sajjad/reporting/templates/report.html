@@ -204,7 +204,7 @@
   /* ── Footer (page numbers via WeasyPrint) ──────────── */
   @page {
     @bottom-right {
-      content: "Sajjad EASM · Pág. " counter(page) " de " counter(pages);
+      content: "{{ css_brand }} · Pág. " counter(page) " de " counter(pages);
       font-size: 8pt; color: #9ca3af;
     }
     @bottom-left {
@@ -240,12 +240,17 @@
 <!-- ══════════════════════════════════════════════════ -->
 <div class="cover">
   <div>
+    {% if white_label %}
+    <div class="cover-logo">{{ brand }}</div>
+    <div class="cover-tagline">Reporte de Seguridad</div>
+    {% else %}
     <div class="cover-logo">SAJJAD<span>.</span></div>
     <div class="cover-tagline">Attack Surface Monitor</div>
+    {% endif %}
   </div>
 
   <div>
-    {% if company_name %}
+    {% if company_name and not white_label %}
     <div style="font-size:11pt;color:#6b7280;margin-bottom:4px;">
       {{ company_name }}
     </div>
@@ -523,7 +528,9 @@
 <section style="margin-top:40px;border-top:1px solid var(--border);
                 padding-top:20px;color:#6b7280;font-size:8.5pt;">
   <p>
-    Este reporte fue generado por <strong>Sajjad EASM</strong> mediante
+    Este reporte fue generado
+    {% if not white_label %}por <strong>Sajjad EASM</strong>{% endif %}
+    mediante
     técnicas de reconocimiento pasivo y activo sobre activos verificados
     como propiedad del cliente. Los hallazgos representan el estado de
     la superficie de ataque al momento del escaneo.

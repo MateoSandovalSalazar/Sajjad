@@ -21,32 +21,29 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from redis.asyncio import Redis
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 from sqlalchemy import text
 
 from app.config import get_settings
-from app.core.exceptions import (
-    Conflict,
-    DomainNotVerified,
-    Forbidden,
-    NotFound,
-    PlanLimitExceeded,
-    SajjadAPIError,
-    ScanAlreadyRunning,
-    Unauthorized,
+
+# Un único handler cubre toda la jerarquía: Starlette recorre el MRO
+# de la excepción al buscar handler, así que registrar la clase base
+# atrapa a todas sus subclases.
+from app.core.exceptions import SajjadAPIError
+from app.core.observability import (
+    configure_logging,
+    configure_sentry,
+    request_id_ctx,
 )
+from app.core.ratelimit import limiter
 from app.database import engine
-from app.routers import auth, billing, domains, public, scans, users
+from app.routers import auth, billing, domains, scans, users
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+configure_logging()
+configure_sentry()
+
 logger = logging.getLogger("sajjad.api")
-
-limiter = Limiter(key_func=get_remote_address)
 
 
 @asynccontextmanager
@@ -80,7 +77,34 @@ def create_app() -> FastAPI:
 
     # ── Rate limiting ────────────────────────────────────
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    @app.exception_handler(RateLimitExceeded)
+    async def handle_rate_limit(request: Request, exc: RateLimitExceeded):
+        """
+        Devuelve el 429 en el mismo sobre JSON que el resto de errores
+        ({"error", "message"}) en vez del formato propio de SlowAPI,
+        para que el frontend lo traduzca por código como los demás.
+        """
+        logger.warning(
+            "Rate limit alcanzado: %s %s desde %s",
+            request.method,
+            request.url.path,
+            request.client.host if request.client else "desconocido",
+        )
+        response = JSONResponse(
+            status_code=429,
+            content={
+                "error": "RateLimitExceeded",
+                "message": (
+                    "Demasiados intentos. Espera un momento y "
+                    "vuelve a intentarlo."
+                ),
+            },
+        )
+        # Cabecera estándar para que los clientes sepan cuánto esperar.
+        return request.app.state.limiter._inject_headers(
+            response, request.state.view_rate_limit
+        )
 
     # ── CORS ─────────────────────────────────────────────
     app.add_middleware(
@@ -95,7 +119,7 @@ def create_app() -> FastAPI:
     if settings.is_production:
         app.add_middleware(
             TrustedHostMiddleware,
-            allowed_hosts=["sajjad.app", "*.sajjad.app"],
+            allowed_hosts=settings.trusted_hosts,
         )
 
     # ── Request ID middleware ─────────────────────────────
@@ -104,11 +128,34 @@ def create_app() -> FastAPI:
         request_id = request.headers.get(
             "X-Request-ID", str(uuid.uuid4())
         )
+        # En un ContextVar para que el formatter lo adjunte a cada
+        # línea de log de esta petición sin tener que pasarlo a mano
+        # por toda la pila de llamadas.
+        token = request_id_ctx.set(request_id)
         start = time.perf_counter()
-        response: Response = await call_next(request)
-        elapsed = time.perf_counter() - start
+        try:
+            response: Response = await call_next(request)
+        finally:
+            elapsed = time.perf_counter() - start
+            request_id_ctx.reset(token)
+
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Response-Time"] = f"{elapsed:.3f}s"
+
+        # Una línea de acceso por petición, con los campos que de
+        # verdad se consultan al investigar un incidente.
+        logger.info(
+            "request",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": round(elapsed * 1000, 1),
+                "client_ip": (
+                    request.client.host if request.client else None
+                ),
+            },
+        )
         return response
 
     # ── Exception handlers ───────────────────────────────
@@ -142,12 +189,49 @@ def create_app() -> FastAPI:
     app.include_router(domains.router, prefix=prefix)
     app.include_router(scans.router, prefix=prefix)
     app.include_router(billing.router, prefix=prefix)
-    app.include_router(public.router, prefix=prefix)
 
-    # ── Health check ──────────────────────────────────────
+    # ── Health checks ─────────────────────────────────────
+    # Se separan a propósito: el orquestador reinicia el contenedor
+    # cuando /health falla, y lo saca del balanceador cuando falla
+    # /health/ready. Una caída de Postgres no debe reiniciar la API
+    # en bucle, sólo dejar de recibir tráfico.
     @app.get("/health", tags=["health"])
     async def health():
+        """Liveness: el proceso responde."""
         return {"status": "ok", "service": "sajjad-api"}
+
+    @app.get("/health/ready", tags=["health"])
+    async def readiness():
+        """Readiness: las dependencias externas contestan."""
+        checks: dict[str, str] = {}
+
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            checks["database"] = "ok"
+        except Exception as exc:
+            logger.error("Readiness: database KO: %s", exc)
+            checks["database"] = "error"
+
+        try:
+            redis = Redis.from_url(settings.redis_url)
+            try:
+                await redis.ping()
+                checks["redis"] = "ok"
+            finally:
+                await redis.aclose()
+        except Exception as exc:
+            logger.error("Readiness: redis KO: %s", exc)
+            checks["redis"] = "error"
+
+        healthy = all(v == "ok" for v in checks.values())
+        return JSONResponse(
+            status_code=200 if healthy else 503,
+            content={
+                "status": "ok" if healthy else "degraded",
+                "checks": checks,
+            },
+        )
 
     return app
 

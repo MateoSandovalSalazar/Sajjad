@@ -16,6 +16,8 @@ const CODE_ES: Record<string, string> = {
   DomainAlreadyExists:'Ese dominio ya está registrado en tu cuenta.',
   NotFound:           'No se encontró el recurso solicitado.',
   ValidationError:    'Revisa los datos ingresados.',
+  BillingDisabled:    'El pago en línea todavía no está disponible. ' +
+                      'Escríbenos y activamos tu plan manualmente.',
 }
 
 export function getErrorMessage(

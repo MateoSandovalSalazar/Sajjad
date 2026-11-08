@@ -1,0 +1,43 @@
+# Caddy obtiene y renueva el certificado TLS solo (Let's Encrypt).
+# Requiere que el DNS de {$SAJJAD_DOMAIN} apunte a la IP del VPS.
+
+{$SAJJAD_DOMAIN} {
+	encode gzip zstd
+
+	# ── API ──────────────────────────────────────────────
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle /health* {
+		reverse_proxy api:8000
+	}
+
+	# ── Frontend (SPA estática) ──────────────────────────
+	handle {
+		root * /srv/frontend
+		# try_files manda cualquier ruta desconocida al index para
+		# que react-router resuelva el enrutado en el cliente.
+		try_files {path} /index.html
+		file_server
+	}
+
+	# ── Cabeceras de seguridad ───────────────────────────
+	# Una empresa de seguridad tiene que aprobar su propio escaneo.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

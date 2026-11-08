@@ -9,7 +9,7 @@ Post-processing step that sanitizes finding data:
 
 import logging
 
-from sajjad.models.finding import Finding, VALID_SEVERITIES
+from sajjad.models.finding import VALID_SEVERITIES, Finding
 
 logger = logging.getLogger(__name__)
 

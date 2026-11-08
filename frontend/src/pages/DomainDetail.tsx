@@ -16,6 +16,7 @@ import { UpgradeBanner } from '../components/UpgradeBanner'
 import { Badge } from '../components/ui/Badge'
 import { Spinner } from '../components/ui/Spinner'
 import { usePlan } from '../hooks/usePlan'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import type { Scan, Severity } from '../types'
 
 const STAGE_LABELS: Record<string, string> = {
@@ -70,15 +71,25 @@ function VerificationPanel({ domainId, fqdn, token }:
             rounded border text-xs">TXT</code> con estos valores:
         </p>
         <div className="bg-white rounded-lg border p-3 space-y-2">
-          <div className="flex justify-between text-xs">
-            <span className="text-gray-500">Nombre</span>
-            <code>_sajjad-verify.{fqdn}</code>
+          <div className="flex justify-between text-xs items-center">
+            <span className="text-gray-500">Tipo</span>
+            <code className="bg-sand-50 px-1.5 py-0.5 rounded border">TXT</code>
+          </div>
+          <div className="flex justify-between text-xs items-center">
+            <span className="text-gray-500">Nombre / Host</span>
+            <div className="text-right">
+              <code className="bg-sand-50 px-1.5 py-0.5 rounded border">@</code>
+              <span className="block text-[11px] text-gray-400 mt-0.5">
+                la raíz de <strong>{fqdn}</strong> (algunos proveedores
+                usan «@» o lo dejan vacío)
+              </span>
+            </div>
           </div>
           <div className="flex justify-between text-xs items-center">
             <span className="text-gray-500">Valor</span>
             <div className="flex items-center gap-2">
               <code className="text-xs">{token}</code>
-              <button onClick={copy}
+              <button onClick={copy} title="Copiar valor"
                 className="text-obsidian-700 hover:text-obsidian-800">
                 {copied
                   ? <CheckCheck className="h-4 w-4 text-green-500" />
@@ -146,6 +157,8 @@ export function DomainDetail() {
     queryFn: () => domainsApi.get(id!).then(r => r.data),
   })
 
+  useDocumentTitle(domain?.fqdn ?? 'Dominio')
+
   const { data: scans, isLoading: loadingScans } = useQuery({
     queryKey: ['scans', id],
     queryFn: () => scansApi.listByDomain(id!).then(r => r.data),
@@ -159,7 +172,7 @@ export function DomainDetail() {
   const { data: scanDetail } = useQuery({
     queryKey: ['scan-detail', lastScan?.id],
     queryFn: () => scansApi.getWithFindings(lastScan!.id).then(r => r.data),
-    enabled: lastScan?.status === 'completed' && caps.canSeeFindings,
+    enabled: lastScan?.status === 'completed' && caps.can_see_findings,
   })
 
   // Poll mientras corre el scan
@@ -241,7 +254,7 @@ export function DomainDetail() {
 
         {domain.is_verified && (
           <div className="flex gap-2 flex-wrap">
-            {lastScan?.status === 'completed' && caps.canDownloadPdf && (
+            {lastScan?.status === 'completed' && caps.can_download_pdf && (
               <button onClick={downloadPdf}
                 className="btn-secondary flex items-center gap-2">
                 <Download className="h-4 w-4" />
@@ -329,7 +342,7 @@ export function DomainDetail() {
           )}
 
           {/* Findings — bloqueados en plan free */}
-          {!caps.canSeeFindings ? (
+          {!caps.can_see_findings ? (
             <UpgradeBanner
               title={`Tu escaneo encontró ${lastScan.findings_count} hallazgo${
                 lastScan.findings_count !== 1 ? 's' : ''}`}

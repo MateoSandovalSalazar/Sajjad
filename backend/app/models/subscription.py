@@ -1,11 +1,12 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.limits import FREE_PLAN, TRIAL_PLAN
 from app.database import Base
 
 
@@ -60,6 +61,11 @@ class Subscription(Base):
     cancelled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Fin de la prueba gratuita. Sólo relevante cuando plan="trial";
+    # al pasar esta fecha, el beat diario degrada la cuenta a free.
+    trial_ends_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     scans_this_month: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
     )
@@ -83,3 +89,37 @@ class Subscription(Base):
     @property
     def is_active(self) -> bool:
         return self.status == SubscriptionStatus.ACTIVE
+
+    @property
+    def is_trial(self) -> bool:
+        return self.plan == TRIAL_PLAN
+
+    def trial_days_left(self, now: datetime | None = None) -> int | None:
+        """
+        Días enteros restantes de prueba, o None si no está en trial.
+        Nunca negativo: 0 significa que ya expiró.
+        """
+        if not self.is_trial or self.trial_ends_at is None:
+            return None
+        now = now or datetime.now(timezone.utc)
+        remaining = self.trial_ends_at - now
+        return max(0, remaining.days + (1 if remaining.seconds else 0))
+
+    def is_trial_expired(self, now: datetime | None = None) -> bool:
+        if not self.is_trial or self.trial_ends_at is None:
+            return False
+        return (now or datetime.now(timezone.utc)) >= self.trial_ends_at
+
+    @property
+    def effective_plan(self) -> str:
+        """
+        Plan realmente vigente en este instante.
+
+        Una suscripción cancelada, o un trial cuya fecha ya pasó,
+        valen free aunque la columna `plan` aún diga otra cosa: el
+        beat que degrada corre una vez al día y no queremos regalar
+        hasta 24 h de capacidades de pago en esa ventana.
+        """
+        if not self.is_active or self.is_trial_expired():
+            return FREE_PLAN
+        return self.plan

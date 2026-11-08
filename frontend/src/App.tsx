@@ -18,6 +18,9 @@ const Dashboard    = lazy(() => import('./pages/Dashboard').then(m => ({ default
 const Domains      = lazy(() => import('./pages/Domains').then(m => ({ default: m.Domains })))
 const DomainDetail = lazy(() => import('./pages/DomainDetail').then(m => ({ default: m.DomainDetail })))
 const Account      = lazy(() => import('./pages/Account').then(m => ({ default: m.Account })))
+const BillingSuccess = lazy(() => import('./pages/BillingSuccess').then(m => ({ default: m.BillingSuccess })))
+const Terms        = lazy(() => import('./pages/Legal').then(m => ({ default: m.Terms })))
+const Privacy      = lazy(() => import('./pages/Legal').then(m => ({ default: m.Privacy })))
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -52,6 +55,8 @@ const router = createBrowserRouter([
   { path: '/register',     element: <Register /> },
   { path: '/verify-email', element: <VerifyEmail /> },
   { path: '/verify-pending', element: <VerifyPending /> },
+  { path: '/legal/terminos',   element: <Terms /> },
+  { path: '/legal/privacidad', element: <Privacy /> },
   {
     element: <RequireAuth />,
     children: [{
@@ -62,6 +67,7 @@ const router = createBrowserRouter([
         { path: '/domains/new',   element: <Navigate to="/domains" replace /> },
         { path: '/domains/:id',   element: <DomainDetail /> },
         { path: '/account',       element: <Account /> },
+        { path: '/billing/success', element: <BillingSuccess /> },
       ],
     }],
   },

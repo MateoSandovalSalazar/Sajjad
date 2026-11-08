@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (ruff + pytest)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sajjad
+          POSTGRES_PASSWORD: sajjad
+          POSTGRES_DB: sajjad_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sajjad"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Versión fijada a propósito: con `uvx ruff` a secas, una release
+      # nueva de ruff rompe el CI por reglas que en local nunca corriste.
+      - name: Lint (ruff)
+        run: uvx ruff@0.15.16 check backend/app sajjad tests backend/tests
+
+      - name: Tests del motor de escaneo
+        run: uv run --with pytest pytest tests -q
+
+      - name: Tests del backend
+        working-directory: backend
+        env:
+          # Los tests levantan su propio esquema contra este Postgres.
+          TEST_DATABASE_URL: >-
+            postgresql+asyncpg://sajjad:sajjad@localhost:5432/sajjad_test
+          REDIS_URL: redis://localhost:6379/0
+          API_SECRET_KEY: ci-secret-only-for-tests-not-production-use
+        run: uv run --extra dev pytest -q
+
+  frontend:
+    name: Frontend (tsc + eslint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc -b
+
+      - name: Lint
+        run: npx eslint src/
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  # Guardarraíl del compromiso ético del producto: Sajjad sólo escanea
+  # dominios verificados por su dueño. Si alguna vez vuelve a aparecer
+  # un endpoint de escaneo sin autenticar, el CI lo bloquea.
+  guardrails:
+    name: Guardarraíles de alcance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --include="*.py": se comprueba el código fuente, no los .pyc
+      # que puedan quedar de un módulo ya borrado.
+      - name: Sin endpoints de escaneo público
+        run: |
+          if grep -rEn --include="*.py" \
+              "trial-scan|public/scan" backend/app/ ; then
+            echo "::error::Endpoint de escaneo sin autenticar detectado."
+            echo "Sajjad sólo escanea dominios verificados por su dueño."
+            exit 1
+          fi
+          echo "OK: no hay endpoints de escaneo público."
+
+      - name: nuclei nunca en modo intrusivo
+        run: |
+          if ! grep -q "exclude-tags" sajjad/scanners/vulns.py ; then
+            echo "::error::nuclei debe excluir tags dos/fuzz/intrusive."
+            exit 1
+          fi
+          echo "OK: nuclei corre en modo detección segura."

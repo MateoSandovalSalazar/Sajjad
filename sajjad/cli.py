@@ -8,16 +8,14 @@ Usage: python sajjad.py --domain example.com --output report.pdf
 import logging
 import os
 import sys
-from pathlib import Path
 
 import click
 from dotenv import load_dotenv
+from rich import box
 from rich.console import Console
-from rich.live import Live
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
-from rich import box
 from rich.text import Text
 
 from sajjad import __version__
@@ -91,7 +89,8 @@ def _print_summary(result) -> None:
     # Risk score
     console.print(
         f"\n  [bold]Risk Score:[/bold] "
-        f"[{score_color} bold]{score}/100 — {level.upper()}[/{score_color} bold]"
+        f"[{score_color} bold]{score}/100 — "
+        f"{level.upper()}[/{score_color} bold]"
     )
 
     # Stats table
@@ -208,8 +207,6 @@ def main(
             console.print(f"[bold red]Error:[/bold red] {exc}")
             sys.exit(1)
 
-    current_stage = {"label": "Iniciando…"}
-
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -240,17 +237,23 @@ def main(
             result = orchestrator.run()
         except SajjadError as exc:
             progress.stop()
-            console.print(f"\n[bold red]Error durante el escaneo:[/bold red] {exc}")
+            console.print(
+                f"\n[bold red]Error durante el escaneo:"
+                f"[/bold red] {exc}"
+            )
             sys.exit(1)
         except KeyboardInterrupt:
             progress.stop()
-            console.print("\n[yellow]Escaneo interrumpido por el usuario.[/yellow]")
+            console.print(
+                "\n[yellow]Escaneo interrumpido "
+                "por el usuario.[/yellow]"
+            )
             sys.exit(130)
 
     _print_summary(result)
 
     # Generate PDF
-    console.print(f"\n[dim]Generando reporte PDF…[/dim]")
+    console.print("\n[dim]Generando reporte PDF…[/dim]")
     try:
         out_path = generate_pdf(
             result,

@@ -12,6 +12,27 @@ class Report:
     )
     company_name: str = ""
     analyst_notes: str = ""
+    # Plan Agency: el reporte sale con la marca del cliente en
+    # vez de la de Sajjad (portada, pie de página y disclaimer).
+    white_label: bool = False
+
+    @property
+    def brand_name(self) -> str:
+        """
+        Marca que encabeza el reporte. En modo white-label es la
+        del cliente; si no hay nombre de empresa, cae a Sajjad
+        para no emitir un PDF sin identificar.
+        """
+        if self.white_label and self.company_name:
+            return self.company_name
+        return "SAJJAD"
+
+    @property
+    def footer_brand(self) -> str:
+        """Marca del pie de página (nombre largo del producto)."""
+        if self.white_label and self.company_name:
+            return self.company_name
+        return "Sajjad EASM"
 
     @property
     def domain(self) -> str:

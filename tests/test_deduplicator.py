@@ -1,4 +1,4 @@
-from sajjad.analysis.deduplicator import deduplicate, _jaccard
+from sajjad.analysis.deduplicator import _jaccard, deduplicate
 from sajjad.models.finding import Finding
 
 

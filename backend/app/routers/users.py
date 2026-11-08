@@ -32,7 +32,7 @@ async def update_profile(
         user.full_name = payload.full_name
     if payload.company is not None:
         user.company = payload.company
-    await db.flush()
+    await db.commit()
     return user
 
 
@@ -46,10 +46,18 @@ async def change_password(
         raise Unauthorized("Current password is incorrect.")
 
     user.hashed_password = hash_password(payload.new_password)
-    await db.flush()
-    return {"message": "Password updated."}
+    # Cierra el resto de sesiones abiertas: cambiar la contraseña
+    # debe expulsar a cualquiera que tuviera un token de esta cuenta.
+    user.token_version += 1
+    await db.commit()
+    return {
+        "message": (
+            "Password updated. Other sessions have been signed out."
+        )
+    }
 
 
 @router.delete("/me", status_code=204)
 async def delete_account(user: VerifiedUser, db: DB):
     await db.delete(user)
+    await db.commit()

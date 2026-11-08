@@ -75,22 +75,48 @@ export interface Plan {
 }
 
 // Respuesta de GET /billing/plans
-export interface PlanInfo {
-  name: string
-  price_usd: number
+// Capacidades de un plan. Las calcula el backend a partir de
+// core/limits.py — el frontend NO reimplementa la tabla de límites,
+// así que las dos no pueden desincronizarse.
+export interface PlanCapabilities {
   max_domains: number
   max_scans_per_month: number
   scan_interval_days: number | null
   can_download_pdf: boolean
+  can_see_findings: boolean
   white_label: boolean
 }
 
-// Respuesta de GET /billing/subscription
+export interface PlanInfo {
+  name: string
+  label: string
+  price_usd: number
+  is_trial: boolean
+  capabilities: PlanCapabilities
+}
+
+// Respuesta de GET /billing/subscription.
+// `plan` es el plan EFECTIVO: un trial vencido reporta "free".
 export interface Subscription {
   id: string
   plan: string
+  plan_label: string
   status: string
+  capabilities: PlanCapabilities
   current_period_end: string | null
   scans_this_month: number
   created_at: string
+
+  is_trial: boolean
+  trial_ends_at: string | null
+  trial_days_left: number | null
+
+  // Si es false, la pasarela de pagos aún no está activa.
+  billing_enabled: boolean
+}
+
+// Respuesta de POST /billing/checkout
+export interface CheckoutResponse {
+  checkout_url: string
+  preference_id: string
 }

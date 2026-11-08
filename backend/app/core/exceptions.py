@@ -9,10 +9,6 @@ HTTPException is not used here to keep the format explicit
 and avoid FastAPI's default detail/detail nesting.
 """
 
-from fastapi import Request
-from fastapi.responses import JSONResponse
-
-
 class SajjadAPIError(Exception):
     status_code: int = 500
     message: str = "Internal server error."
@@ -64,3 +60,10 @@ class DomainNotVerified(SajjadAPIError):
 class ScanAlreadyRunning(SajjadAPIError):
     status_code = 409
     message = "A scan is already running for this domain."
+
+
+class BillingDisabled(SajjadAPIError):
+    """La pasarela de pagos no está habilitada todavía."""
+
+    status_code = 503
+    message = "Online payments are not enabled yet."

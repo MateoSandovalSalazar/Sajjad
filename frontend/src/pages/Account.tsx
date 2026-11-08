@@ -1,29 +1,25 @@
-import { useState, useEffect } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
-import { User as UserIcon, Check, Crown, Sparkles } from 'lucide-react'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { User as UserIcon, Check, Crown, Sparkles, Mail } from 'lucide-react'
 import { usersApi } from '../api/users'
 import { billingApi } from '../api/billing'
 import { useAuthStore } from '../store/auth'
 import { toast } from '../store/toast'
+import { getErrorMessage } from '../lib/errors'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { Spinner } from '../components/ui/Spinner'
 import type { PlanInfo } from '../types'
 
-const PLAN_LABELS: Record<string, string> = {
-  free:         'Free',
-  starter:      'Starter',
-  professional: 'Professional',
-  agency:       'Agency',
-}
+// Canal de contratación mientras la pasarela de pagos no esté activa.
+const CONTACT_EMAIL = 'hola@sajjad.app'
 
 function ProfileSection() {
   const { user, updateUser } = useAuthStore()
-  const [fullName, setFullName] = useState('')
-  const [company, setCompany]   = useState('')
-
-  useEffect(() => {
-    setFullName(user?.full_name ?? '')
-    setCompany(user?.company ?? '')
-  }, [user])
+  // Estado inicial perezoso a partir del usuario; el componente se
+  // re-monta (key por id en <Account/>) cuando el usuario carga, así
+  // evitamos sincronizar con setState dentro de un efecto.
+  const [fullName, setFullName] = useState(() => user?.full_name ?? '')
+  const [company, setCompany]   = useState(() => user?.company ?? '')
 
   const dirty =
     fullName !== (user?.full_name ?? '') ||
@@ -83,14 +79,21 @@ function ProfileSection() {
   )
 }
 
-function PlanCard({ plan, current }: { plan: PlanInfo; current: boolean }) {
-  const label = PLAN_LABELS[plan.name] ?? plan.name
+function PlanCard({ plan, current, onSelect, loading, billingEnabled }: {
+  plan: PlanInfo
+  current: boolean
+  onSelect: () => void
+  loading: boolean
+  billingEnabled: boolean
+}) {
+  const label = plan.label
   const featured = plan.name === 'professional'
+  const caps = plan.capabilities
 
-  const interval = plan.scan_interval_days === 1
+  const interval = caps.scan_interval_days === 1
     ? 'Escaneos diarios'
-    : plan.scan_interval_days
-      ? `Escaneos cada ${plan.scan_interval_days} días`
+    : caps.scan_interval_days
+      ? `Escaneos cada ${caps.scan_interval_days} días`
       : 'Escaneos manuales'
 
   return (
@@ -120,7 +123,7 @@ function PlanCard({ plan, current }: { plan: PlanInfo; current: boolean }) {
       <ul className="space-y-2 mb-6 flex-1">
         <li className="flex items-center gap-2 text-sm text-gray-600">
           <Check className="h-4 w-4 text-green-500 shrink-0" />
-          {plan.max_domains} dominio{plan.max_domains > 1 ? 's' : ''}
+          {caps.max_domains} dominio{caps.max_domains > 1 ? 's' : ''}
         </li>
         <li className="flex items-center gap-2 text-sm text-gray-600">
           <Check className="h-4 w-4 text-green-500 shrink-0" />
@@ -128,15 +131,15 @@ function PlanCard({ plan, current }: { plan: PlanInfo; current: boolean }) {
         </li>
         <li className="flex items-center gap-2 text-sm text-gray-600">
           <Check className="h-4 w-4 text-green-500 shrink-0" />
-          {plan.max_scans_per_month} escaneos/mes
+          {caps.max_scans_per_month} escaneos/mes
         </li>
-        {plan.can_download_pdf && (
+        {caps.can_download_pdf && (
           <li className="flex items-center gap-2 text-sm text-gray-600">
             <Check className="h-4 w-4 text-green-500 shrink-0" />
             Reporte PDF
           </li>
         )}
-        {plan.white_label && (
+        {caps.white_label && (
           <li className="flex items-center gap-2 text-sm text-gray-600">
             <Check className="h-4 w-4 text-green-500 shrink-0" />
             Reportes white-label
@@ -149,22 +152,34 @@ function PlanCard({ plan, current }: { plan: PlanInfo; current: boolean }) {
           className="btn-secondary w-full opacity-60 cursor-default">
           Plan actual
         </button>
-      ) : (
+      ) : billingEnabled ? (
         <button
-          onClick={() => toast.info(
-            'El pago en línea estará disponible muy pronto. ' +
-            'Escríbenos para activar tu plan.',
-          )}
+          onClick={onSelect}
+          disabled={loading}
           className="btn-primary w-full flex items-center justify-center gap-2">
-          <Sparkles className="h-4 w-4" />
+          {loading
+            ? <Spinner size="sm" />
+            : <Sparkles className="h-4 w-4" />}
           Mejorar a {label}
         </button>
+      ) : (
+        // El pago en línea todavía no está activo: en vez de un botón
+        // que falla, se ofrece el canal que sí funciona hoy.
+        <a href={`mailto:${CONTACT_EMAIL}?subject=${
+          encodeURIComponent(`Quiero contratar el plan ${label}`)
+        }`}
+          className="btn-secondary w-full flex items-center justify-center gap-2">
+          <Mail className="h-4 w-4" />
+          Contactar para contratar
+        </a>
       )}
     </div>
   )
 }
 
 function PlansSection() {
+  const qc = useQueryClient()
+
   const { data: plans, isLoading } = useQuery({
     queryKey: ['plans'],
     queryFn: () => billingApi.plans().then(r => r.data),
@@ -179,19 +194,83 @@ function PlansSection() {
   })
 
   const currentPlan = sub?.plan ?? 'free'
+  const billingEnabled = sub?.billing_enabled ?? false
+  // Sólo se cancela lo que se paga: un trial expira solo.
+  const isPaid = currentPlan !== 'free' && !sub?.is_trial
+
+  // Checkout: pide la URL de Mercado Pago y redirige. Si el pago aún
+  // no está configurado en el backend, mostramos un mensaje claro.
+  const checkout = useMutation({
+    mutationFn: (plan: string) =>
+      billingApi.checkout(plan).then(r => r.data),
+    onSuccess: (data) => {
+      window.location.href = data.checkout_url
+    },
+    onError: (err) =>
+      toast.error(getErrorMessage(
+        err,
+        'El pago en línea no está disponible por ahora. ' +
+        'Escríbenos para activar tu plan.',
+      )),
+  })
+
+  const cancel = useMutation({
+    mutationFn: () => billingApi.cancel().then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['subscription'] })
+      toast.success('Suscripción cancelada. Volviste al plan Free.')
+    },
+    onError: (err) =>
+      toast.error(getErrorMessage(err, 'No se pudo cancelar la suscripción.')),
+  })
+
+  const confirmCancel = () => {
+    if (window.confirm(
+      '¿Seguro que quieres cancelar tu suscripción? ' +
+      'Perderás el acceso a los hallazgos detallados y reportes PDF.',
+    )) cancel.mutate()
+  }
 
   return (
     <div className="card p-6">
-      <h2 className="font-bold text-gray-900 mb-1 flex items-center gap-2">
-        <Crown className="h-5 w-5 text-gold-500" />
-        Tu plan
-      </h2>
+      <div className="flex items-start justify-between gap-4 mb-1 flex-wrap">
+        <h2 className="font-bold text-gray-900 flex items-center gap-2">
+          <Crown className="h-5 w-5 text-gold-500" />
+          Tu plan
+        </h2>
+        {isPaid && billingEnabled && (
+          <button onClick={confirmCancel} disabled={cancel.isPending}
+            className="text-sm text-gray-400 hover:text-red-600 transition-colors
+              disabled:opacity-50">
+            {cancel.isPending ? 'Cancelando…' : 'Cancelar suscripción'}
+          </button>
+        )}
+      </div>
       <p className="text-sm text-gray-500 mb-5">
-        Plan actual: <strong>{PLAN_LABELS[currentPlan] ?? currentPlan}</strong>
+        Plan actual: <strong>{sub?.plan_label ?? 'Free'}</strong>
         {sub && (
           <> · {sub.scans_this_month} escaneos este mes</>
         )}
       </p>
+
+      {sub?.is_trial && sub.trial_days_left !== null && (
+        <div className="mb-5 rounded-xl border border-gold-500/40 bg-gold-50/50
+          px-4 py-3">
+          <p className="text-sm text-obsidian-900 font-semibold">
+            Estás en tu prueba gratuita
+            {sub.trial_days_left > 0
+              ? ` — te quedan ${sub.trial_days_left} día${
+                  sub.trial_days_left === 1 ? '' : 's'}`
+              : ' — termina hoy'}
+            .
+          </p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Incluye 3 dominios, escaneos diarios, hallazgos detallados
+            y reportes PDF. Al terminar, tu cuenta pasa al plan Free
+            sin que se te cobre nada.
+          </p>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="flex justify-center py-8"><Spinner /></div>
@@ -199,15 +278,29 @@ function PlansSection() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {plans?.map(p => (
             <PlanCard key={p.name} plan={p}
-              current={p.name === currentPlan} />
+              current={p.name === currentPlan}
+              billingEnabled={billingEnabled}
+              loading={checkout.isPending && checkout.variables === p.name}
+              onSelect={() => checkout.mutate(p.name)} />
           ))}
         </div>
       )}
+
+      <p className="text-xs text-gray-400 mt-5 flex items-center gap-1.5">
+        <Sparkles className="h-3.5 w-3.5 text-gold-500 shrink-0" />
+        {billingEnabled
+          ? 'Pagos procesados de forma segura por Mercado Pago. ' +
+            'Cancela cuando quieras.'
+          : 'El pago en línea estará disponible muy pronto. Mientras ' +
+            'tanto activamos los planes manualmente — escríbenos.'}
+      </p>
     </div>
   )
 }
 
 export function Account() {
+  useDocumentTitle('Mi cuenta')
+  const { user } = useAuthStore()
   return (
     <div>
       <div className="mb-8">
@@ -218,7 +311,7 @@ export function Account() {
       </div>
 
       <div className="space-y-6">
-        <ProfileSection />
+        <ProfileSection key={user?.id ?? 'loading'} />
         <PlansSection />
       </div>
     </div>

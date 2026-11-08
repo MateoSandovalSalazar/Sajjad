@@ -11,13 +11,21 @@ import os
 import shutil
 from typing import Callable
 
+from sajjad.analysis import calculate_score, deduplicate, hosting
+from sajjad.analysis.normalizer import normalize
 from sajjad.exceptions import ToolNotFoundError
 from sajjad.models.finding import Finding
 from sajjad.models.scan_result import ScanResult
-from sajjad.scanners import dns, http, osint, ports, subdomain, tls, vulns
-from sajjad.scanners import _resolve_binary
-from sajjad.analysis import deduplicate, calculate_score
-from sajjad.analysis.normalizer import normalize
+from sajjad.scanners import (
+    _resolve_binary,
+    dns,
+    http,
+    osint,
+    ports,
+    subdomain,
+    tls,
+    vulns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,25 +114,77 @@ class ScanOrchestrator:
         )
 
         # ── Stage 4: Port scanning ─────────────────────
-        self._step("PORTS", f"Escaneando puertos en {len(live_hosts)} hosts…")
-        port_map = ports.scan_ports(
-            live_hosts, timeout=self.scan_timeout
-        )
+        #
+        # La decisión se toma HOST POR HOST. Los que resuelven a un
+        # CDN o PaaS (Vercel, Cloudflare, Shopify…) se omiten: esas
+        # IPs no son del cliente, no puede autorizarlas y sus puertos
+        # no dicen nada de su seguridad. Los que apuntan a servidores
+        # propios se escanean enteros, aunque la raíz del dominio esté
+        # en un CDN — un `erp.` o un `vpn.` en un VPS propio es
+        # justamente donde suelen estar los problemas graves.
+        #
+        # Ver sajjad/analysis/hosting.py para el razonamiento completo.
+        own_hosts, shared_hosts = hosting.classify_hosts(dns_records)
+
+        if shared_hosts:
+            for host, provider in shared_hosts.items():
+                logger.info(
+                    "Puertos omitidos en %s: alojado en %s", host, provider
+                )
+            all_findings.append(
+                _shared_hosting_finding(self.domain, shared_hosts)
+            )
+
+        port_map: dict[str, list[int]] = {}
+        port_findings: list[Finding] = []
+
+        if own_hosts:
+            self._step(
+                "PORTS",
+                f"Escaneando puertos en {len(own_hosts)} hosts propios"
+                + (
+                    f" ({len(shared_hosts)} omitidos por estar en CDN)"
+                    if shared_hosts
+                    else ""
+                ),
+            )
+            port_map = ports.scan_ports(
+                own_hosts, timeout=self.scan_timeout
+            )
+            port_findings = ports.analyze_ports(port_map)
+            all_findings.extend(port_findings)
+            total_ports = sum(len(v) for v in port_map.values())
+            self._step(
+                "PORTS",
+                f"{total_ports} puertos abiertos · "
+                f"{len(port_findings)} hallazgos",
+            )
+        else:
+            proveedores = ", ".join(sorted(set(shared_hosts.values())))
+            self._step(
+                "PORTS",
+                f"Omitido: todos los hosts están en infraestructura "
+                f"compartida ({proveedores})",
+            )
+
         result.open_ports = port_map
-        port_findings = ports.analyze_ports(port_map)
-        all_findings.extend(port_findings)
-        total_ports = sum(len(v) for v in port_map.values())
-        self._step(
-            "PORTS",
-            f"{total_ports} puertos abiertos · "
-            f"{len(port_findings)} hallazgos",
-        )
 
         # ── Stage 5: TLS analysis ──────────────────────
-        https_hosts = [
-            h for h, ps in port_map.items() if 443 in ps
-        ] or live_hosts[:20]
-        self._step("TLS", f"Analizando certificados en {len(https_hosts)} hosts…")
+        #
+        # Se analizan TODOS los hosts vivos, también los que están en
+        # un CDN: un handshake TLS es lo mismo que hace cualquier
+        # navegador al visitar el sitio, así que no hay problema de
+        # alcance, y el certificado sí le interesa al cliente.
+        # Los que tienen el 443 confirmado van primero.
+        with_443 = [h for h, ps in port_map.items() if 443 in ps]
+        https_hosts = with_443 + [
+            h for h in live_hosts if h not in with_443
+        ]
+        https_hosts = https_hosts[:20]
+        self._step(
+            "TLS",
+            f"Analizando certificados en {len(https_hosts)} hosts…",
+        )
         tls_findings = tls.analyze_tls(
             https_hosts, timeout=self.scan_timeout // 2
         )
@@ -181,3 +241,58 @@ class ScanOrchestrator:
     def _step(self, stage: str, message: str) -> None:
         self._progress(stage, message)
         logger.info("[%s] %s", stage, message)
+
+
+def _shared_hosting_finding(
+    domain: str, shared_hosts: dict[str, str]
+) -> Finding:
+    """
+    Deja constancia en el informe de qué hosts no se escanearon y por
+    qué.
+
+    Un apartado vacío sin explicación parece un fallo del producto;
+    explicado, es una decisión de alcance que además le enseña al
+    cliente algo cierto sobre su infraestructura.
+    """
+    proveedores = sorted(set(shared_hosts.values()))
+    lista = ", ".join(proveedores)
+    n = len(shared_hosts)
+
+    return Finding(
+        category="cloud",
+        severity="info",
+        title=f"{n} host(s) en infraestructura compartida ({lista})",
+        description=(
+            f"{n} de tus hosts resuelven a direcciones IP que "
+            f"pertenecen a {lista}, no a tu organización. En esos "
+            f"hosts se omitió el escaneo de puertos por dos motivos: "
+            f"son IPs compartidas por todos los clientes del "
+            f"proveedor —así que los puertos abiertos no dicen nada "
+            f"sobre tu seguridad— y analizarlas queda fuera de lo "
+            f"que tú puedes autorizar.\n\n"
+            f"El resto del análisis (subdominios, cabeceras HTTP, "
+            f"certificados TLS, DNS de correo, vulnerabilidades web "
+            f"y credenciales filtradas) se ejecutó con normalidad "
+            f"sobre estos hosts y es plenamente aplicable.\n\n"
+            f"Hosts afectados: "
+            + ", ".join(
+                f"{h} ({p})" for h, p in sorted(shared_hosts.items())
+            )
+        ),
+        evidence={
+            "providers": proveedores,
+            "hosts": shared_hosts,
+            "domain": domain,
+        },
+        recommendation=(
+            "No requiere acción sobre estos hosts: su exposición de "
+            "red la gestiona el proveedor. Céntrate en los hallazgos "
+            "de configuración web, TLS y DNS de este informe, que sí "
+            "están bajo tu control.\n\n"
+            "Los hosts que apuntan a servidores propios (VPN, correo, "
+            "ERP, paneles de administración) sí se analizaron por "
+            "completo, puertos incluidos."
+        ),
+        source_tool="sajjad-hosting",
+        host=domain,
+    )

@@ -8,7 +8,7 @@ live here so routers stay thin and readable.
 import uuid
 from typing import Annotated
 
-from fastapi import Depends, Header
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,10 +19,9 @@ from app.core.exceptions import (
     PlanLimitExceeded,
     Unauthorized,
 )
-from app.core.limits import get_limits
 from app.core.security import decode_token
 from app.database import get_db
-from app.models import Subscription, User
+from app.models import User
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -54,6 +53,11 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise Unauthorized()
 
+    # Un token emitido antes del último cambio de contraseña queda
+    # invalidado, aunque todavía no haya expirado.
+    if payload.get("tv", 0) != user.token_version:
+        raise Unauthorized("Session expired. Please log in again.")
+
     return user
 
 
@@ -76,17 +80,12 @@ def require_plan(*allowed_plans: str):
     async def _check(
         user: Annotated[User, Depends(require_verified)],
     ) -> User:
-        sub: Subscription | None = user.subscription
-        if sub is None or not sub.is_active:
-            raise PlanLimitExceeded(
-                "No active subscription. Upgrade your plan to access "
-                "this feature."
-            )
-        if allowed_plans and sub.plan not in allowed_plans:
+        plan = user.plan
+        if allowed_plans and plan not in allowed_plans:
             raise PlanLimitExceeded(
                 f"This feature requires one of: "
                 f"{', '.join(allowed_plans)}. "
-                f"Your current plan: {sub.plan}."
+                f"Your current plan: {plan}."
             )
         return user
 
@@ -96,9 +95,7 @@ def require_plan(*allowed_plans: str):
 async def get_current_plan(
     user: Annotated[User, Depends(get_current_user)],
 ) -> str:
-    if user.subscription and user.subscription.is_active:
-        return user.subscription.plan
-    return "free"
+    return user.plan
 
 
 # ── Convenience type aliases ────────────────────────────

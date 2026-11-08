@@ -13,3 +13,13 @@ build/
 backend/reports/
 celerybeat-schedule
 celerybeat-schedule.db
+
+# Node
+node_modules/
+
+# Backups de producción — nunca al repositorio
+backend/backups/
+
+# Certificados y datos de Caddy
+caddy_data/
+caddy_config/

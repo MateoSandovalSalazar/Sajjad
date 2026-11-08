@@ -9,7 +9,6 @@ record for the root domain. Verification is idempotent
 and can be retried any number of times.
 """
 
-import asyncio
 import logging
 
 import dns.asyncresolver

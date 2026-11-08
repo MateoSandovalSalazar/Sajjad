@@ -39,6 +39,26 @@ class Domain(Base):
     verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    # ── Registro de autorización ─────────────────────────────
+    #
+    # Sajjad escanea infraestructura ajena: la defensa legal es poder
+    # demostrar que el titular de la cuenta declaró ser dueño del
+    # dominio y autorizó el escaneo. Se guarda cuándo, desde qué IP y
+    # con qué navegador — un checkbox sin rastro no prueba nada.
+    #
+    # La verificación DNS TXT demuestra el control técnico; esto
+    # documenta el consentimiento explícito. Hacen falta las dos.
+    authorized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    authorized_ip: Mapped[str | None] = mapped_column(
+        String(45), nullable=True  # 45 = IPv6 en su forma más larga
+    )
+    authorized_user_agent: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

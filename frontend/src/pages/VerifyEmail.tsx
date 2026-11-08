@@ -10,13 +10,18 @@ export function VerifyEmail() {
   const navigate  = useNavigate()
   const token     = params.get('token')
 
-  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading')
+  // Estado inicial derivado del token: sin token, error directo (sin
+  // setState dentro del efecto). El efecto solo hace la llamada async.
+  const [status, setStatus] =
+    useState<'loading' | 'success' | 'error'>(token ? 'loading' : 'error')
 
   useEffect(() => {
-    if (!token) { setStatus('error'); return }
+    if (!token) return
+    let cancelled = false
     authApi.verifyEmail(token)
-      .then(() => setStatus('success'))
-      .catch(() => setStatus('error'))
+      .then(() => { if (!cancelled) setStatus('success') })
+      .catch(() => { if (!cancelled) setStatus('error') })
+    return () => { cancelled = true }
   }, [token])
 
   return (

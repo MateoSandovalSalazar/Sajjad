@@ -223,3 +223,28 @@ def _find_dmarc(domain: str) -> str | None:
         if clean.startswith("v=DMARC1"):
             return clean
     return None
+
+
+def query_nameservers(domain: str) -> list[str]:
+    """
+    Nameservers autoritativos del dominio.
+
+    Se usan para identificar al proveedor de hosting: el dominio de
+    los NS es una señal mucho más estable que los rangos de IP, que
+    los CDN rotan sin avisar.
+    """
+    try:
+        result = subprocess.run(
+            ["dig", "+short", "NS", domain],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return [
+            line.strip().rstrip(".")
+            for line in result.stdout.strip().splitlines()
+            if line.strip()
+        ]
+    except Exception:
+        logger.debug("No se pudieron consultar los NS de %s", domain)
+        return []

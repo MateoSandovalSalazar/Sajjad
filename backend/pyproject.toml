@@ -27,9 +27,10 @@ dependencies = [
     # Email
     "aiosmtplib>=3.0",
     "jinja2>=3.1",
-    # Scanning engine — installed separately in Docker (see Dockerfile)
-    # For local dev: uv sync installs it from the absolute path below
-    "sajjad @ file:///home/patitasking/proyectos/Sajjad",
+    # Motor de escaneo (paquete `sajjad` en la raíz del repo).
+    # La ruta se resuelve en [tool.uv.sources], relativa a este
+    # archivo — nunca una ruta absoluta al home del desarrollador.
+    "sajjad",
     # DNS resolution for domain verification
     "dnspython>=2.6",
     # Sync DB driver for Celery workers
@@ -41,12 +42,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Reporte de errores en producción. Opcional: sin SENTRY_DSN el
+# código de observabilidad es un no-op y no hace falta instalarlo.
+monitoring = [
+    "sentry-sdk[fastapi,celery,sqlalchemy]>=2.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "httpx>=0.27",
     "pytest-cov>=5.0",
 ]
+
+[tool.uv.sources]
+sajjad = { path = "..", editable = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -65,3 +74,14 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 80
 target-version = "py312"
+
+# Mismo conjunto de reglas que el pyproject de la raíz: un único
+# criterio de estilo para todo el repo, y sin depender de los
+# defaults de ruff (que cambian entre versiones).
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+# N818 (sufijo "Error" en excepciones) no aplica aquí: el nombre de
+# la clase ES el código de error que la API devuelve al cliente
+# ({"error": "PlanLimitExceeded"}) y que el frontend traduce.
+# Renombrarlas rompería el contrato público.
+ignore = ["N806", "N818"]

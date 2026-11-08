@@ -9,10 +9,18 @@ from celery import Celery
 from celery.schedules import crontab
 
 from app.config import get_settings
+from app.core.observability import configure_logging, configure_sentry
 
 
 def create_celery() -> Celery:
     settings = get_settings()
+
+    # El worker es un proceso aparte de la API: necesita su propia
+    # configuración de logging y Sentry. Es además donde corren los
+    # escaneos, así que es el sitio donde más importa enterarse de
+    # los fallos.
+    configure_logging()
+    configure_sentry()
 
     app = Celery(
         "sajjad",
@@ -35,6 +43,14 @@ def create_celery() -> Celery:
             "schedule-due-scans": {
                 "task": "app.workers.scan_task.schedule_due_scans",
                 "schedule": crontab(minute="*/15"),
+            },
+            "reset-monthly-scan-counts": {
+                "task": "app.workers.scan_task.reset_monthly_scan_counts",
+                "schedule": crontab(hour=0, minute=10),  # diario 00:10 UTC
+            },
+            "expire-trials": {
+                "task": "app.workers.scan_task.expire_trials",
+                "schedule": crontab(hour=0, minute=20),  # diario 00:20 UTC
             },
         },
     )

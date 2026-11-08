@@ -61,7 +61,8 @@ def scan_with_naabu(
     if not hosts:
         return []
 
-    import tempfile, os as _os
+    import os as _os
+    import tempfile
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False
     ) as tmp:

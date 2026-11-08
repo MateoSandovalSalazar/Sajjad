@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   Globe, Lock, Mail, AlertTriangle, Search,
   ChevronRight, Check, Zap, Eye, FileText, Server,
-  Key, Menu, X,
+  Key, Menu, X, ShieldCheck, Ban, Fingerprint, Sparkles,
 } from 'lucide-react'
 import { EyeOfHorus } from '../components/ui/EyeOfHorus'
 
@@ -324,6 +324,74 @@ function HowItWorks() {
   )
 }
 
+const TRUST = [
+  {
+    icon: Fingerprint,
+    title: 'Solo dominios que verificas',
+    desc: 'Antes de escanear, confirmas que el dominio es tuyo con un registro DNS único. Nunca tocamos activos que no te pertenecen.',
+  },
+  {
+    icon: Ban,
+    title: 'Detección, nunca explotación',
+    desc: 'Identificamos exposiciones sin explotarlas. Excluimos pruebas intrusivas, de denegación de servicio o fuzzing. Tu infraestructura jamás corre riesgo.',
+  },
+  {
+    icon: Lock,
+    title: 'Tus datos, bajo llave',
+    desc: 'Los resultados de tus escaneos son privados y cifrados. No compartimos ni vendemos información de tu superficie de ataque a terceros.',
+  },
+  {
+    icon: ShieldCheck,
+    title: 'Escaneo responsable',
+    desc: 'Aplicamos rate-limiting en cada análisis y respetamos el alcance acordado. Seguridad ofensiva con disciplina defensiva.',
+  },
+]
+
+function TrustSecurity() {
+  return (
+    <section className="relative overflow-hidden py-24 px-6 bg-obsidian-950">
+      <EyeOfHorus
+        className="absolute -left-24 bottom-0 w-[480px] text-gold-500/5
+          pointer-events-none select-none"
+        strokeWidth={2}
+      />
+      <div className="relative z-10 max-w-6xl mx-auto">
+        <div className="text-center mb-16">
+          <div className="inline-flex items-center gap-2 bg-gold-500/10
+            border border-gold-500/20 rounded-full px-4 py-1.5 mb-6">
+            <ShieldCheck className="h-4 w-4 text-gold-400" />
+            <span className="text-gold-300 text-sm font-medium">
+              Seguridad y ética por diseño
+            </span>
+          </div>
+          <h2 className="text-4xl font-black text-white mb-4">
+            Una empresa de seguridad debe ser la primera en ser segura
+          </h2>
+          <p className="text-white/50 text-lg max-w-2xl mx-auto">
+            Tomamos en serio la confianza que depositas en nosotros.
+            Cada decisión técnica prioriza tu seguridad y tu privacidad.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          {TRUST.map(({ icon: Icon, title, desc }) => (
+            <div key={title}
+              className="bg-white/[0.04] border border-white/10 rounded-2xl p-6
+                hover:border-gold-500/30 transition-colors">
+              <div className="bg-gold-500/10 w-11 h-11 rounded-xl flex items-center
+                justify-center mb-4">
+                <Icon className="h-5 w-5 text-gold-400" />
+              </div>
+              <h3 className="font-bold text-white mb-2">{title}</h3>
+              <p className="text-sm text-white/50 leading-relaxed">{desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 const PLANS = [
   {
     id: 'starter',
@@ -383,12 +451,21 @@ function Pricing() {
     <section id="pricing" className="py-24 px-6 bg-white">
       <div className="max-w-5xl mx-auto">
         <div className="text-center mb-16">
+          <div className="inline-flex items-center gap-2 rounded-full
+            border border-gold-500/50 bg-gold-50 px-4 py-1.5 mb-5">
+            <Sparkles className="h-4 w-4 text-gold-600" />
+            <span className="text-sm font-bold text-obsidian-900">
+              14 días de prueba gratis — sin tarjeta de crédito
+            </span>
+          </div>
           <h2 className="text-4xl font-black text-obsidian-900 mb-4">
             Precios claros, sin sorpresas
           </h2>
           <p className="text-gray-500 text-lg">
-            Planes diseñados para empresas latinoamericanas.
-            Cancela cuando quieras.
+            Empiezas con 14 días de acceso completo: 3 dominios,
+            escaneos diarios, hallazgos detallados y reportes PDF.
+            Al terminar decides — no se te cobra nada
+            automáticamente.
           </p>
         </div>
 
@@ -525,13 +602,22 @@ function Footer() {
         <p className="text-white/20 text-sm">
           © {new Date().getFullYear()} Sajjad. Todos los derechos reservados.
         </p>
-        <div className="flex items-center gap-6 text-white/30 text-sm">
+        <div className="flex flex-wrap items-center justify-center gap-x-6
+          gap-y-2 text-white/30 text-sm">
           <a href="#features" className="hover:text-white/60 transition-colors">
             Características
           </a>
           <a href="#pricing" className="hover:text-white/60 transition-colors">
             Precios
           </a>
+          <Link to="/legal/terminos"
+            className="hover:text-white/60 transition-colors">
+            Términos
+          </Link>
+          <Link to="/legal/privacidad"
+            className="hover:text-white/60 transition-colors">
+            Privacidad
+          </Link>
           <Link to="/login" className="hover:text-white/60 transition-colors">
             Login
           </Link>
@@ -548,6 +634,7 @@ export function Landing() {
       <Hero />
       <Features />
       <HowItWorks />
+      <TrustSecurity />
       <Pricing />
       <FinalCTA />
       <Footer />
